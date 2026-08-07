@@ -76,7 +76,12 @@ export async function sanitizeOfficeMetadata(zip: JSZip): Promise<void> {
   await editPart(zip, "docProps/core.xml", (xml) => blankElementText(xml, CORE_TAGS));
   await editPart(zip, "docProps/app.xml", (xml) => blankElementText(xml, APP_TAGS));
   await editPart(zip, "docProps/custom.xml", (xml) => blankElementText(xml, CUSTOM_STRING_TAGS));
-  await editMatching(zip, /^word\/comments\.xml$/, (xml) => blankAttr(xml, ["w:author", "w:initials"]));
+  // Author names are stamped ACROSS word/*.xml, not just comments: tracked revisions (<w:ins>/<w:del>
+  // w:author) live in document.xml, and word/people.xml is a registry of reviewer display names
+  // (w15:author / w15:userId). Blank the author/initials/display-name attributes wherever they appear.
+  await editMatching(zip, /^word\/[^/]+\.xml$/, (xml) =>
+    blankAttr(xml, ["w:author", "w:initials", "w15:author", "w15:userId"]),
+  );
   await editMatching(zip, /^xl\/comments\d*\.xml$/, (xml) => blankElementText(xml, ["author"]));
   await editMatching(zip, /^xl\/persons\/person\d*\.xml$/, (xml) => blankAttr(xml, ["displayName"]));
   await removeThumbnail(zip);
