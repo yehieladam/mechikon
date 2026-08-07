@@ -28,6 +28,12 @@ import type { OcrPageResult, OcrWord } from "./ocrTypes";
 const SCAN_MEAN_CONF_FLOOR = 75;
 const LOW_CONF_WORD_FLOOR = 60;
 const MAX_LOW_CONF_RATIO = 0.12;
+// Near-zero recognized words = cannot certify. The confidence signals score only words OCR actually
+// FOUND, so ink it cannot read at all (handwriting, stamps) contributes nothing and would otherwise let
+// a page carried by a single legible token pass. A page reduced to one recognized word has no readable
+// content to trust, so it fails closed. This is a floor, not a cure for confident misreads (see header)
+// nor for unread ink beneath a readable printed body — that residual needs pixel-level ink analysis.
+const MIN_RECOGNIZED_WORDS = 2;
 
 /** Refusal code surfaced to the UI when a scan reads too poorly to redact reliably. */
 export const SCAN_LOW_CONFIDENCE = "SCAN_LOW_CONFIDENCE";
@@ -41,13 +47,13 @@ function textWords(page: OcrPageResult): OcrWord[] {
 
 /**
  * Pass a page only when it reads cleanly on BOTH signals: a high page-mean confidence AND a small
- * fraction of low-confidence words. Either signal failing — or an empty/unreadable page — refuses.
- * Bounds are inclusive (>= floor, <= max ratio).
+ * fraction of low-confidence words. Either signal failing — or a page with near-zero recognized words —
+ * refuses. Bounds are inclusive (>= floor, <= max ratio).
  */
 export function evaluateScanQuality(page: OcrPageResult): ScanQuality {
   const words = textWords(page);
-  if (words.length === 0) {
-    return { ok: false, reason: SCAN_LOW_CONFIDENCE }; // unreadable → refuse, never silently pass
+  if (words.length < MIN_RECOGNIZED_WORDS) {
+    return { ok: false, reason: SCAN_LOW_CONFIDENCE }; // empty or a lone token → cannot certify, refuse
   }
   const meanConfidence = words.reduce((sum, word) => sum + word.confidence, 0) / words.length;
   const lowRatio = words.filter((word) => word.confidence < LOW_CONF_WORD_FLOOR).length / words.length;
