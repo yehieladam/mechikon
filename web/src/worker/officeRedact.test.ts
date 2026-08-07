@@ -223,6 +223,43 @@ describe("redactOffice — metadata strip + comment routing (2b)", () => {
   });
 });
 
+describe("redactOffice — embedded objects (B4, fail closed)", () => {
+  const BODY = (text: string) => `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body><w:p><w:r><w:t xml:space="preserve">${text}</w:t></w:r></w:p></w:body>
+</w:document>`;
+
+  it("B4. refuses a docx that embeds an OOXML object holding a PII table (neither redacted nor scanned)", async () => {
+    // The embedded xlsx is a whole nested zip — its bytes (with the ID) are copied verbatim into the
+    // outer docx and never touched by the overlay/self-verify. Silently shipping it leaks the table.
+    const embedded = new JSZip();
+    embedded.file("[Content_Types].xml", "<Types/>");
+    embedded.file(
+      "xl/sharedStrings.xml",
+      `<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><si><t>מספר זהות 123456709</t></si></sst>`,
+    );
+    const embeddedBytes = await embedded.generateAsync({ type: "uint8array" });
+
+    const zip = new JSZip();
+    zip.file("[Content_Types].xml", "<Types/>");
+    zip.file("word/document.xml", BODY("ראה קובץ מצורף"));
+    zip.file("word/embeddings/Microsoft_Excel_Worksheet1.xlsx", embeddedBytes);
+    await expect(redactDocx(await zip.generateAsync({ type: "arraybuffer" }))).rejects.toThrow(
+      OFFICE_SELFVERIFY_FAILED,
+    );
+  });
+
+  it("B4. refuses a docx that embeds a legacy OLE object (oleObject1.bin)", async () => {
+    const zip = new JSZip();
+    zip.file("[Content_Types].xml", "<Types/>");
+    zip.file("word/document.xml", BODY("שלום"));
+    zip.file("word/embeddings/oleObject1.bin", new Uint8Array([0xd0, 0xcf, 0x11, 0xe0, 1, 2, 3]));
+    await expect(redactDocx(await zip.generateAsync({ type: "arraybuffer" }))).rejects.toThrow(
+      OFFICE_SELFVERIFY_FAILED,
+    );
+  });
+});
+
 describe("redactXlsx — numeric cells (the silent-leak fix)", () => {
   it("1. redacts a 9-digit ID stored as a NUMBER and keeps the restore mapping", async () => {
     const { bytes, result } = await redactXlsx(

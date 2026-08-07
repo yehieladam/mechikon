@@ -70,6 +70,15 @@ export const XLSX_FORMULA_PII = "XLSX_FORMULA_PII";
 /** Thrown when an original PII value still appears in ANY text part of the output — refuse, never ship. */
 export const OFFICE_SELFVERIFY_FAILED = "OFFICE_SELFVERIFY_FAILED";
 
+/**
+ * Embedded objects (B4): an OLE blob or a NESTED OOXML/zip part (`word/embeddings/…`, `oleObject*.bin`,
+ * an embedded `.xlsx`/`.docx`/`.pptx`) is a self-contained payload the overlay never opens and the
+ * self-verify never inflates — its original bytes are copied through verbatim. An embedded worksheet can
+ * hold a full PII table, so shipping it is a silent leak. Until nested redaction exists we FAIL CLOSED:
+ * refuse (reusing the OFFICE_SELFVERIFY notice) rather than hand back a file with un-scanned PII inside.
+ */
+const EMBEDDED_PART = /(^|\/)embeddings\/|oleobject\d*\.bin$|\.(xlsx|docx|pptx|xlsm|docm|pptm)$/i;
+
 /** A region of one XML part to rewrite in place. "text" = a text-node's inner; "numcell" = a whole `<c>`. */
 interface Edit {
   readonly path: string;
@@ -275,6 +284,14 @@ async function redactOffice(
   anonymize: Anonymize,
 ): Promise<RedactedFile> {
   const zip = await loadZip(buffer);
+
+  // B4 (fail closed): an embedded OLE/OOXML object is copied through verbatim — the overlay never opens
+  // it and the self-verify never inflates it, so a PII table hidden inside would ship silently. Refuse.
+  const embedded = Object.keys(zip.files).filter((name) => !zip.files[name].dir && EMBEDDED_PART.test(name));
+  if (embedded.length > 0) {
+    throw new Error(`${OFFICE_SELFVERIFY_FAILED}: embedded object(s) cannot be redacted — ${embedded.join(", ")}`);
+  }
+
   const paths = Object.keys(zip.files)
     .filter((name) => !zip.files[name].dir && matchPart(name))
     .sort((a, b) => order(a) - order(b));
