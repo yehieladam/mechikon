@@ -11,6 +11,7 @@ import { anonymizeDeterministic } from "@engine/pipeline";
 import type { OcrPageResult, OcrWord } from "@engine/ocrTypes";
 import { redactFile } from "./officeRedact";
 import { isScannedPdf } from "./pdfRedact";
+import { collectOutlineItems } from "./pdfSanitize";
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- mupdf node surface is untyped */
 function abs(rel: string): string {
@@ -49,6 +50,44 @@ async function buildMixedPdf(): Promise<ArrayBuffer> {
   const page = doc.addPage([0, 0, wPt, hPt], 0, resources, `q ${wPt} 0 0 ${hPt} 0 0 cm /Img Do Q`);
   doc.insertPage(-1, page); // append as page 1 (image-only)
   return new Uint8Array(doc.saveToBuffer({ garbage: "deduplicate" }).asUint8Array()).buffer;
+}
+
+/** Build an image-only (scanned) PDF that carries ONE outline (bookmark) whose title holds PII. */
+async function buildScanPdfWithBookmark(title: string): Promise<ArrayBuffer> {
+  const mupdf: any = await import("mupdf");
+  const src = mupdf.PDFDocument.openDocument(readFileSync(abs(TEXT_PDF)), "application/pdf");
+  const pix = src.loadPage(0).toPixmap(mupdf.Matrix.scale(200 / 72, 200 / 72), mupdf.ColorSpace.DeviceRGB, false);
+  const doc = new mupdf.PDFDocument();
+  const imgRef = doc.addImage(new mupdf.Image(pix));
+  const resources = doc.addObject({ XObject: { Img: imgRef } });
+  const wPt = (pix.getWidth() * 72) / 200;
+  const hPt = (pix.getHeight() * 72) / 200;
+  const page = doc.addPage([0, 0, wPt, hPt], 0, resources, `q ${wPt} 0 0 ${hPt} 0 0 cm /Img Do Q`);
+  doc.insertPage(-1, page);
+  // Attach a bookmark: Root -> Outlines -> First/Last -> item{ Title }.
+  const item = doc.newDictionary();
+  item.put("Title", doc.newString(title));
+  const itemRef = doc.addObject(item);
+  const outlines = doc.newDictionary();
+  outlines.put("Type", doc.newName("Outlines"));
+  outlines.put("First", itemRef);
+  outlines.put("Last", itemRef);
+  outlines.put("Count", doc.newInteger(1));
+  const outlinesRef = doc.addObject(outlines);
+  item.put("Parent", outlinesRef);
+  doc.getTrailer().get("Root").put("Outlines", outlinesRef);
+  return new Uint8Array(doc.saveToBuffer({ garbage: "deduplicate" }).asUint8Array()).buffer;
+}
+
+/** Re-open produced bytes and return every outline title (for the leak assertion). */
+async function outlineTitlesOf(bytes: Uint8Array): Promise<string[]> {
+  const mupdf: any = await import("mupdf");
+  const doc = mupdf.PDFDocument.openDocument(bytes, "application/pdf");
+  try {
+    return collectOutlineItems(doc).map((item) => item.title);
+  } finally {
+    doc.destroy();
+  }
 }
 
 const word = (text: string, confidence: number): OcrWord => ({ text, confidence, bbox: { x0: 100, y0: 100, x1: 300, y1: 140 } });
@@ -114,5 +153,26 @@ describe("mixed digital+scanned classification (B3 — per-page, not whole-docum
     });
     expect(bytes).toBeInstanceOf(Uint8Array);
     expect(bytes && bytes.length).toBeGreaterThan(0);
+  });
+});
+
+describe("scan path sanitizes outline (bookmark) titles", () => {
+  const PII_TITLE = "יוסי כהן - תיק 4711";
+
+  it("does not ship a PII bookmark title through the OCR path", async () => {
+    // The digital redactPdf path anonymizes outline titles; the scan path only stripped Info/XMP/annots,
+    // so a bookmark like "יוסי כהן - תיק 4711" shipped verbatim. The scan path cannot tie a title to its
+    // OCR-derived key/verify, so it blanks outline titles (fail closed) — no PII survives in navigation.
+    const scan = await buildScanPdfWithBookmark(PII_TITLE);
+    const before = await outlineTitlesOf(new Uint8Array(scan));
+    expect(before).toContain(PII_TITLE); // the fixture really carries the PII bookmark
+
+    const { bytes } = await redactFile("scan.pdf", scan, anonymizeDeterministic, {
+      scanOcr: true,
+      ocr: ocrOf(cleanNoPii),
+    });
+    const after = await outlineTitlesOf(bytes as Uint8Array);
+    expect(after.join("\n")).not.toContain("יוסי"); // no PII name survives in any outline title
+    expect(after.join("\n")).not.toContain("4711"); // nor the case number
   });
 });

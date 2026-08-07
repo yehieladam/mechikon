@@ -19,7 +19,7 @@ import { anonymize as tokenize } from "@engine/anonymize";
 import { markScanKeySources, scanTextLeaks } from "@engine/scanKey";
 import type { OcrPageResult } from "@engine/ocrTypes";
 import type { AnonymizeResult, Span } from "@engine/types";
-import { sanitizeMetadata } from "./pdfSanitize";
+import { sanitizeMetadata, collectOutlineItems } from "./pdfSanitize";
 import { ocrImage } from "./ocr";
 import type { RedactedFile, Anonymize } from "./officeRedact";
 
@@ -123,6 +123,13 @@ export async function redactScan(
 
   // Strip the invisible metadata leak channels (Info, XMP, embedded files, annotation text).
   sanitizeMetadata(doc);
+  // Blank outline (bookmark) titles. The digital redactPdf path anonymizes them coherently with the body
+  // key, but on a scan the titles are exact text with no tie to the OCR-derived key/verify — so a
+  // bookmark like "יוסי כהן - תיק 4711" would ship verbatim. We cannot certify a title clean, so we clear
+  // it (fail closed): navigation labels are secondary; a burned-in name in them is not.
+  for (const item of collectOutlineItems(doc)) {
+    item.setTitle("");
+  }
 
   // Copy out of WASM memory before self-verify re-opens mupdf (asUint8Array is a live view).
   const bytes = new Uint8Array(doc.saveToBuffer(SAFE_SAVE_OPTIONS).asUint8Array());
