@@ -260,6 +260,42 @@ describe("redactOffice — embedded objects (B4, fail closed)", () => {
   });
 });
 
+describe("redactDocx — tracked changes + fields (silent-leak fix)", () => {
+  const DOC = (bodyInner: string) => `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>${bodyInner}</w:body>
+</w:document>`;
+
+  it("redacts an ID retained inside <w:delText> (tracked deletion), not just visible <w:t>", async () => {
+    // A tracked deletion keeps the deleted text in the file as <w:delText> — invisible in Word's final
+    // view but present in the bytes. Currently only <w:t> is collected, so this ID sails through.
+    const doc = DOC(
+      `<w:p><w:del w:id="1" w:author="עו״ד"><w:r><w:delText xml:space="preserve">מספר זהות 123456709</w:delText></w:r></w:del></w:p>`,
+    );
+    const zip = new JSZip();
+    zip.file("[Content_Types].xml", "<Types/>");
+    zip.file("word/document.xml", doc);
+    const { bytes, result } = await redactDocx(await zip.generateAsync({ type: "arraybuffer" }));
+    const out = await (await JSZip.loadAsync(bytes)).file("word/document.xml")!.async("string");
+    expect(out).toContain("[ID_1]");
+    expect(out).not.toContain("123456709");
+    expect(result.key.map((r) => r.original)).toContain("123456709");
+  });
+
+  it("redacts an email carried in a field instruction (<w:instrText>)", async () => {
+    const doc = DOC(
+      `<w:p><w:r><w:instrText xml:space="preserve"> HYPERLINK "mailto:test@example.co.il" </w:instrText></w:r></w:p>`,
+    );
+    const zip = new JSZip();
+    zip.file("[Content_Types].xml", "<Types/>");
+    zip.file("word/document.xml", doc);
+    const { bytes } = await redactDocx(await zip.generateAsync({ type: "arraybuffer" }));
+    const out = await (await JSZip.loadAsync(bytes)).file("word/document.xml")!.async("string");
+    expect(out).toContain("[EMAIL_1]");
+    expect(out).not.toContain("test@example.co.il");
+  });
+});
+
 describe("redactXlsx — numeric cells (the silent-leak fix)", () => {
   it("1. redacts a 9-digit ID stored as a NUMBER and keeps the restore mapping", async () => {
     const { bytes, result } = await redactXlsx(

@@ -205,12 +205,14 @@ function collectNumericEdits(part: string, path: string, order: number): Edit[] 
  * AnonymizeResult (for the UI chips + restore key).
  */
 async function redactParts(
-  parts: ReadonlyArray<{ path: string; content: string; groupTag: string; numeric: boolean }>,
-  tag: string,
+  parts: ReadonlyArray<{ path: string; content: string; tags: readonly string[]; groupTag: string; numeric: boolean }>,
   anonymize: Anonymize,
 ): Promise<{ updated: Map<string, string>; result: AnonymizeResult }> {
   const perPart = parts.map((part, order) => {
-    const text = collectTextEdits(part.content, part.path, order, tag, part.groupTag);
+    // A part can carry text in more than one element kind (docx: visible <w:t> PLUS deleted-but-retained
+    // <w:delText> and field <w:instrText>; xlsx worksheet: cell <t> PLUS print headers). All are collected
+    // into the same detection stream so hidden text is redacted AND covered by the self-verify.
+    const text = part.tags.flatMap((tag) => collectTextEdits(part.content, part.path, order, tag, part.groupTag));
     const numeric = part.numeric ? collectNumericEdits(part.content, part.path, order) : [];
     return [...text, ...numeric].sort((a, b) => a.start - b.start);
   });
@@ -278,7 +280,7 @@ async function redactOffice(
   buffer: ArrayBuffer,
   matchPart: (name: string) => boolean,
   order: (name: string) => number,
-  tag: string,
+  tagsFor: (name: string) => readonly string[],
   groupTagFor: (name: string) => string,
   numericFor: (name: string) => boolean,
   anonymize: Anonymize,
@@ -299,11 +301,12 @@ async function redactOffice(
     paths.map(async (path) => ({
       path,
       content: await zip.files[path].async("string"),
+      tags: tagsFor(path),
       groupTag: groupTagFor(path),
       numeric: numericFor(path),
     })),
   );
-  const { updated, result } = await redactParts(parts, tag, anonymize);
+  const { updated, result } = await redactParts(parts, anonymize);
   for (const [path, content] of updated) {
     zip.file(path, content);
   }
@@ -346,9 +349,16 @@ function numberIn(name: string): number {
   return match ? Number.parseInt(match[1], 10) : 0;
 }
 
-/** Redact a .docx by overlaying placeholders onto its `<w:t>` runs, preserving everything else. */
+/**
+ * docx text-bearing elements: visible runs `<w:t>`, deleted-but-retained tracked-change text
+ * `<w:delText>`, and field instructions `<w:instrText>` (a HYPERLINK/MERGEFIELD instruction can carry an
+ * email or id). All three feed detection so hidden text is redacted in place and covered by the self-verify.
+ */
+const DOCX_TEXT_TAGS = ["w:t", "w:delText", "w:instrText"] as const;
+
+/** Redact a .docx by overlaying placeholders onto its text runs (incl. tracked changes + fields). */
 export function redactDocx(buffer: ArrayBuffer, anonymize: Anonymize = anonymizeDeterministic): Promise<RedactedFile> {
-  return redactOffice(buffer, (name) => DOCX_PART.test(name), docxOrder, "w:t", () => "w:p", () => false, anonymize);
+  return redactOffice(buffer, (name) => DOCX_PART.test(name), docxOrder, () => DOCX_TEXT_TAGS, () => "w:p", () => false, anonymize);
 }
 
 /** A worksheet part (holds inline strings and numeric cells). */
@@ -368,7 +378,7 @@ export function redactXlsx(buffer: ArrayBuffer, anonymize: Anonymize = anonymize
     buffer,
     (name) => name === "xl/sharedStrings.xml" || XLSX_SHEET.test(name) || XLSX_COMMENTS.test(name),
     (name) => (name === "xl/sharedStrings.xml" ? 0 : XLSX_COMMENTS.test(name) ? 1000 + numberIn(name) : 1 + numberIn(name)),
-    "t",
+    () => ["t"],
     (name) => (name === "xl/sharedStrings.xml" ? "si" : XLSX_COMMENTS.test(name) ? "comment" : "c"),
     (name) => XLSX_SHEET.test(name),
     anonymize,
