@@ -52,4 +52,21 @@ describe("officeLeakScan", () => {
     expect(result.pass).toBe(true);
     expect(result.hits).toEqual([]);
   });
+
+  it("6. does NOT falsely refuse a name that only appears inside a longer word (whole-word matched)", () => {
+    // The name כהן was redacted ([NAME_1]); the word מכהן ("as he serves") legitimately CONTAINS it. A
+    // space-stripped substring .includes would wrongly flag it — whole-word matching must not.
+    const result = officeLeakScan(
+      parts({ "word/document.xml": "<w:t>[NAME_1] מכהן בתפקידו</w:t>" }),
+      ["כהן"],
+    );
+    expect(result.pass).toBe(true);
+    expect(result.hits).toEqual([]);
+  });
+
+  it("7. still refuses a genuine whole-word survivor of that same name", () => {
+    const result = officeLeakScan(parts({ "word/document.xml": "<w:t>מר כהן הגיע</w:t>" }), ["כהן"]);
+    expect(result.pass).toBe(false);
+    expect(result.hits).toEqual(["word/document.xml: כהן"]);
+  });
 });
