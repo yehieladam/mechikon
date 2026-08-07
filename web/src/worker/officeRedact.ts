@@ -377,15 +377,73 @@ const XLSX_SHEET = /^xl\/worksheets\/sheet\d+\.xml$/;
  * file header. The `t="inlineStr"` attribute is never mistaken for a `<t>` element (`<t\b` needs `<t`).
  */
 const XLSX_COMMENTS = /^xl\/comments\d*\.xml$/;
+const XLSX_THREADED = /^xl\/threadedComments\/threadedComment\d*\.xml$/;
+const XLSX_DRAWING = /^xl\/drawings\/drawing\d*\.xml$/;
+const XLSX_CHART = /^xl\/charts\/chart\d*\.xml$/;
+const XLSX_WORKBOOK = "xl/workbook.xml";
+
+/**
+ * Print headers/footers live in the worksheet part (`<headerFooter><oddHeader>…`), NOT in a `<t>` node —
+ * so they need their own tags on the worksheet, alongside cell text. All three odd/even/first variants.
+ */
+const XLSX_HEADER_FOOTER_TAGS = [
+  "oddHeader",
+  "evenHeader",
+  "firstHeader",
+  "oddFooter",
+  "evenFooter",
+  "firstFooter",
+] as const;
+
+/**
+ * Every text-bearing xlsx part class, with the element tag(s) that carry its text and the element that
+ * delimits one logical group (a newline is inserted between groups so detection never bridges them).
+ * Beyond the cell text (shared strings, inline worksheet strings) this now also covers the hidden
+ * surfaces that previously shipped un-scanned: worksheet print headers/footers, textboxes in drawings
+ * (`<a:t>`), threaded comments (`<text>`), `<definedName>` constants in the workbook, and chart data
+ * caches (`<c:v>`). Anything not listed here is still swept by the fail-closed self-verify.
+ *
+ * Documented residual: PIVOT caches (`xl/pivotCache/*`) store shared items as ATTRIBUTES (`<s v="…"/>`),
+ * not element text — a value there that also appears in a redacted cell is caught by the self-verify
+ * (which scans raw part content, attributes included); a name existing ONLY in a pivot cache is the one
+ * remaining gap and is left to a follow-up.
+ */
+interface XlsxPartClass {
+  readonly match: (name: string) => boolean;
+  readonly order: (name: string) => number;
+  readonly tags: readonly string[];
+  readonly groupTag: string;
+  readonly numeric: boolean;
+}
+
+const XLSX_PART_CLASSES: readonly XlsxPartClass[] = [
+  { match: (n) => n === "xl/sharedStrings.xml", order: () => 0, tags: ["t"], groupTag: "si", numeric: false },
+  {
+    match: (n) => XLSX_SHEET.test(n),
+    order: (n) => 1 + numberIn(n),
+    tags: ["t", ...XLSX_HEADER_FOOTER_TAGS],
+    groupTag: "c",
+    numeric: true,
+  },
+  { match: (n) => XLSX_COMMENTS.test(n), order: (n) => 1000 + numberIn(n), tags: ["t"], groupTag: "comment", numeric: false },
+  { match: (n) => XLSX_THREADED.test(n), order: (n) => 2000 + numberIn(n), tags: ["text"], groupTag: "threadedComment", numeric: false },
+  { match: (n) => XLSX_DRAWING.test(n), order: (n) => 3000 + numberIn(n), tags: ["a:t"], groupTag: "a:p", numeric: false },
+  { match: (n) => XLSX_CHART.test(n), order: (n) => 4000 + numberIn(n), tags: ["c:v"], groupTag: "c:pt", numeric: false },
+  { match: (n) => n === XLSX_WORKBOOK, order: () => 5000, tags: ["definedName"], groupTag: "definedName", numeric: false },
+];
+
+function xlsxClass(name: string): XlsxPartClass | undefined {
+  return XLSX_PART_CLASSES.find((cls) => cls.match(name));
+}
 
 export function redactXlsx(buffer: ArrayBuffer, anonymize: Anonymize = anonymizeDeterministic): Promise<RedactedFile> {
   return redactOffice(
     buffer,
-    (name) => name === "xl/sharedStrings.xml" || XLSX_SHEET.test(name) || XLSX_COMMENTS.test(name),
-    (name) => (name === "xl/sharedStrings.xml" ? 0 : XLSX_COMMENTS.test(name) ? 1000 + numberIn(name) : 1 + numberIn(name)),
-    () => ["t"],
-    (name) => (name === "xl/sharedStrings.xml" ? "si" : XLSX_COMMENTS.test(name) ? "comment" : "c"),
-    (name) => XLSX_SHEET.test(name),
+    (name) => xlsxClass(name) !== undefined,
+    (name) => xlsxClass(name)?.order(name) ?? 0,
+    (name) => xlsxClass(name)?.tags ?? ["t"],
+    (name) => xlsxClass(name)?.groupTag ?? "c",
+    (name) => xlsxClass(name)?.numeric ?? false,
     anonymize,
   );
 }

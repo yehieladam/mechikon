@@ -382,6 +382,69 @@ describe("redactXlsx — numeric cells (the silent-leak fix)", () => {
   });
 });
 
+describe("redactXlsx — hidden text surfaces (silent-leak fix)", () => {
+  const WORKSHEET = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+  async function partOut(bytes: Uint8Array, path: string): Promise<string> {
+    return (await JSZip.loadAsync(bytes)).file(path)!.async("string");
+  }
+  async function buildZip(files: Record<string, string>): Promise<ArrayBuffer> {
+    const zip = new JSZip();
+    zip.file("[Content_Types].xml", "<Types/>");
+    for (const [path, content] of Object.entries(files)) {
+      zip.file(path, content);
+    }
+    return zip.generateAsync({ type: "arraybuffer" });
+  }
+
+  it("redacts a client name in a worksheet print header (<oddHeader>)", async () => {
+    const sheet = `<?xml version="1.0"?><worksheet xmlns="${WORKSHEET}"><sheetData/><headerFooter><oddHeader>&amp;Cלקוח דנה כהן</oddHeader></headerFooter></worksheet>`;
+    const detectName: Anonymize = (t) => anonymizeManualOnly(t, ["דנה כהן"]);
+    const { bytes } = await redactXlsx(await buildZip({ "xl/worksheets/sheet1.xml": sheet }), detectName);
+    const out = await partOut(bytes, "xl/worksheets/sheet1.xml");
+    expect(out).not.toContain("דנה כהן");
+    expect(out).toMatch(/\[TERM_\d+\]/);
+  });
+
+  it("redacts an ID in a threaded comment (xl/threadedComments/*)", async () => {
+    const tc = `<ThreadedComments xmlns="http://schemas.microsoft.com/office/spreadsheetml/2018/threadedcomments"><threadedComment ref="A1" id="{1}"><text>מספר 123456709</text></threadedComment></ThreadedComments>`;
+    const { bytes } = await redactXlsx(
+      await buildZip({
+        "xl/worksheets/sheet1.xml": `<?xml version="1.0"?><worksheet xmlns="${WORKSHEET}"><sheetData/></worksheet>`,
+        "xl/threadedComments/threadedComment1.xml": tc,
+      }),
+    );
+    const out = await partOut(bytes, "xl/threadedComments/threadedComment1.xml");
+    expect(out).toContain("[ID_1]");
+    expect(out).not.toContain("123456709");
+  });
+
+  it("redacts a phone in a drawing textbox (xl/drawings/* <a:t>)", async () => {
+    const drawing = `<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><xdr:sp><xdr:txBody><a:p><a:r><a:t>טלפון 052-1234567</a:t></a:r></a:p></xdr:txBody></xdr:sp></xdr:wsDr>`;
+    const { bytes } = await redactXlsx(
+      await buildZip({
+        "xl/worksheets/sheet1.xml": `<?xml version="1.0"?><worksheet xmlns="${WORKSHEET}"><sheetData/></worksheet>`,
+        "xl/drawings/drawing1.xml": drawing,
+      }),
+    );
+    const out = await partOut(bytes, "xl/drawings/drawing1.xml");
+    expect(out).toContain("[PHONE_1]");
+    expect(out).not.toContain("1234567");
+  });
+
+  it("redacts an ID constant in a <definedName> (xl/workbook.xml)", async () => {
+    const workbook = `<workbook xmlns="${WORKSHEET}"><definedNames><definedName name="Client">"123456709"</definedName></definedNames><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>`;
+    const { bytes } = await redactXlsx(
+      await buildZip({
+        "xl/workbook.xml": workbook,
+        "xl/worksheets/sheet1.xml": `<?xml version="1.0"?><worksheet xmlns="${WORKSHEET}"><sheetData/></worksheet>`,
+      }),
+    );
+    const out = await partOut(bytes, "xl/workbook.xml");
+    expect(out).toContain("[ID_1]");
+    expect(out).not.toContain("123456709");
+  });
+});
+
 describe("redactXlsx — formula cache PII (full scan, fail closed)", () => {
   it("refuses a formula cell whose cached <v> hides a phone in a MIXED string", async () => {
     // numericPii only fires on a whole-value deterministic match; a cached string result carrying a phone
