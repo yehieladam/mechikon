@@ -9,7 +9,8 @@
 import { describe, expect, it } from "vitest";
 import JSZip from "jszip";
 import { restore } from "@engine/restore";
-import { redactDocx, redactXlsx, XLSX_FORMULA_PII, OFFICE_SELFVERIFY_FAILED } from "./officeRedact";
+import { anonymizeManualOnly } from "@engine/pipeline";
+import { redactDocx, redactXlsx, XLSX_FORMULA_PII, OFFICE_SELFVERIFY_FAILED, type Anonymize } from "./officeRedact";
 import { restoreFile } from "./restoreFile";
 
 /** Wrap worksheet rows in a valid sheet part; optionally add a shared-string table. */
@@ -378,5 +379,29 @@ describe("redactXlsx — numeric cells (the silent-leak fix)", () => {
     // Distinct, non-colliding placeholders.
     const placeholders = result.key.map((r) => r.placeholder);
     expect(new Set(placeholders).size).toBe(placeholders.length);
+  });
+});
+
+describe("redactXlsx — formula cache PII (full scan, fail closed)", () => {
+  it("refuses a formula cell whose cached <v> hides a phone in a MIXED string", async () => {
+    // numericPii only fires on a whole-value deterministic match; a cached string result carrying a phone
+    // slips past it. The full anonymize must run over the cached <v> so any hit refuses the file.
+    const sheet = `<row r="1"><c r="A1" t="str"><f>CONCATENATE(B1,C1)</f><v>טלפון 052-1234567</v></c></row>`;
+    await expect(redactXlsx(await buildXlsxWith(sheet))).rejects.toThrow(XLSX_FORMULA_PII);
+  });
+
+  it("refuses a formula cell caching a PERSON NAME (full injected anonymize over <v>)", async () => {
+    const sheet = `<row r="1"><c r="A1" t="str"><f>VLOOKUP(B1,D:E,2,0)</f><v>דנה כהן</v></c></row>`;
+    const detectName: Anonymize = (text) => anonymizeManualOnly(text, ["דנה כהן"]);
+    await expect(redactXlsx(await buildXlsxWith(sheet), detectName)).rejects.toThrow(XLSX_FORMULA_PII);
+  });
+
+  it("leaves a NON-PII formula cell byte-identical (no false refuse, no conversion)", async () => {
+    const sheet = `<row r="1"><c r="A1"><f>SUM(B1:B3)</f><v>42</v></c></row>`;
+    const { bytes, result } = await redactXlsx(await buildXlsxWith(sheet));
+    const out = await sheetOut(bytes);
+    expect(out).toContain("<f>SUM(B1:B3)</f><v>42</v>");
+    expect(out).not.toContain("inlineStr");
+    expect(result.key.length).toBe(0);
   });
 });

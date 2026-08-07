@@ -180,19 +180,24 @@ function collectNumericEdits(part: string, path: string, order: number): Edit[] 
     if (typeMatch !== null && typeMatch[1] === "s") {
       continue; // shared-string index — must stay byte-identical
     }
+    const isFormula = /<f[\s>/]/.test(inner);
     const contributed = numericPii(decodeXml(valueMatch[1]));
-    if (contributed === null) {
+    if (contributed === null && !isFormula) {
       continue; // ordinary number
     }
+    // A numeric-PII match feeds its (leading-zero-restored) value; a formula with no whole-value numeric
+    // match still feeds its FULL cached <v> text, so the whole injected anonymize runs over it — a name,
+    // a mixed string, or an external-workbook cache that hides PII trips the isFormula guard (fail closed)
+    // in redactParts. A formula with no PII stays byte-identical (the region is left unchanged).
     edits.push({
       path,
       kind: "numcell",
       start: match.index,
       end: match.index + full.length,
       group: `${order}:num:${index}`,
-      text: contributed,
+      text: contributed ?? decodeXml(valueMatch[1]),
       cellAttrs: attrs.replace(/\s+t="[^"]*"/g, ""),
-      isFormula: /<f[\s>/]/.test(inner),
+      isFormula,
     });
     index += 1;
   }
