@@ -72,4 +72,18 @@ describe("sanitizeOfficeMetadata", () => {
     expect(out).toContain("<author></author>");
     expect(out).not.toContain("משה לוי");
   });
+
+  it("7. removes docProps/thumbnail.* (a rendered image of the original page 1) and its relationship", async () => {
+    const zip = new JSZip();
+    zip.file("docProps/thumbnail.jpeg", new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3]));
+    zip.file(
+      "_rels/.rels",
+      `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/thumbnail" Target="docProps/thumbnail.jpeg"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`,
+    );
+    await sanitizeOfficeMetadata(zip);
+    expect(zip.file("docProps/thumbnail.jpeg")).toBeNull();
+    const rels = await zip.file("_rels/.rels")!.async("string");
+    expect(rels).not.toContain("thumbnail");
+    expect(rels).toContain('Target="word/document.xml"'); // other relationships preserved
+  });
 });
