@@ -37,19 +37,57 @@ export const NO_TEXT_LAYER = "NO_TEXT_LAYER";
  * tokenization/overlay bug, so BOTH deliverables are refused (this hard gate is never relaxed). Distinct
  * from a visual-PDF verify failure, which only warns (RedactedFile.pdfUnverified). */
 export const TEXT_SELFVERIFY_FAILED = "TEXT_SELFVERIFY_FAILED";
-/** Below this many non-whitespace characters across the whole document, we treat it as image-only. */
+/** Below this many non-whitespace characters (per page AND whole-document), we treat it as image-only. */
 const NO_TEXT_LAYER_MIN_CHARS = 3;
+/** Fraction of a page's area an image must cover to read as "most of the page" (a full-bleed scan). */
+const IMAGE_ONLY_COVER_MIN = 0.5;
 
 /**
- * Classify a PDF as text-layer vs scanned (image-only) by the same threshold redactPdf refuses on —
- * shared so the dispatcher can ROUTE (scan → OCR path) instead of hitting the NO_TEXT_LAYER refusal.
- * A cheap extra mupdf open; OCR dwarfs it. redactPdf keeps its own NO_TEXT_LAYER throw as a backstop.
+ * Per-page scan classification (B3): does ANY page carry almost no extractable text (< MIN_CHARS
+ * non-whitespace) yet is mostly covered by an image? That page is image-only — burned-in content our
+ * glyph-based text detection is blind to, so redacting the file on the text path would hand back a
+ * silently under-redacted document (one digital page must not mark a whole mixed file "text"). A
+ * genuinely blank page (no text AND no large image) is NOT image-only, so it never forces OCR/refusal.
+ * `preserve-images` is required for onImageBlock to fire (default stext drops image blocks).
+ */
+function hasImageOnlyPage(doc: any): boolean {
+  const pageCount: number = doc.countPages();
+  for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
+    const page = doc.loadPage(pageIndex);
+    const bounds = page.getBounds();
+    const pageArea = Math.max(1, (bounds[2] - bounds[0]) * (bounds[3] - bounds[1]));
+    let textChars = 0;
+    let maxImageCover = 0;
+    page.toStructuredText("preserve-whitespace,preserve-images").walk({
+      onChar(char: string) {
+        if (char.trim().length > 0) {
+          textChars += 1;
+        }
+      },
+      onImageBlock(bbox: ArrayLike<number>) {
+        const area = Math.max(0, (bbox[2] - bbox[0]) * (bbox[3] - bbox[1]));
+        maxImageCover = Math.max(maxImageCover, area / pageArea);
+      },
+    });
+    if (textChars < NO_TEXT_LAYER_MIN_CHARS && maxImageCover >= IMAGE_ONLY_COVER_MIN) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Classify a PDF as text-layer vs scanned (image-only) — shared so the dispatcher can ROUTE (scan → OCR
+ * path) instead of hitting the NO_TEXT_LAYER refusal. Scanned = the WHOLE document has no usable text OR
+ * ANY single page is image-only (a mixed digital+scanned file, B3). A cheap extra mupdf open; OCR dwarfs
+ * it. redactPdf keeps its own NO_TEXT_LAYER throw as a backstop.
  */
 export async function isScannedPdf(buffer: ArrayBuffer): Promise<boolean> {
   const mupdf: any = await import("mupdf");
   const doc = mupdf.PDFDocument.openDocument(new Uint8Array(buffer), "application/pdf");
   try {
-    return mappedFromDoc(doc).text.replace(/\s/g, "").length < NO_TEXT_LAYER_MIN_CHARS;
+    const wholeDocNoText = mappedFromDoc(doc).text.replace(/\s/g, "").length < NO_TEXT_LAYER_MIN_CHARS;
+    return wholeDocNoText || hasImageOnlyPage(doc);
   } finally {
     doc.destroy(); // do not leak the classification doc — the caller re-opens for the real pass
   }
@@ -261,10 +299,11 @@ export async function redactPdf(buffer: ArrayBuffer, anonymize: Anonymize): Prom
   const doc = mupdf.PDFDocument.openDocument(new Uint8Array(buffer), "application/pdf");
   const mapped = mappedFromDoc(doc);
 
-  // Refuse a PDF with no usable text layer. A scanned/photographed document is an IMAGE — our text
-  // detection is blind to it, so redacting it would produce a falsely-clean file (a silent leak). We
-  // refuse rather than under-redact; reading scans is the OCR track (PDF-05), not yet available.
-  if (mapped.text.replace(/\s/g, "").length < NO_TEXT_LAYER_MIN_CHARS) {
+  // Refuse a PDF with no usable text layer — OR one whose text layer is only PARTIAL (a mixed file with
+  // at least one image-only page, B3). A scanned/photographed page is an IMAGE our text detection is
+  // blind to, so redacting on the text path would leave that page burned-in while the verify (keyed on
+  // text detections) passes — a falsely-clean file. Fail closed; the OCR track (scanOcr on) reads scans.
+  if (mapped.text.replace(/\s/g, "").length < NO_TEXT_LAYER_MIN_CHARS || hasImageOnlyPage(doc)) {
     throw new Error(NO_TEXT_LAYER);
   }
 

@@ -33,6 +33,24 @@ async function buildScanPdf(): Promise<ArrayBuffer> {
   return new Uint8Array(doc.saveToBuffer({ garbage: "deduplicate" }).asUint8Array()).buffer;
 }
 
+/**
+ * Build a MIXED PDF: page 0 is the original digital text page, page 1 is a full-page image (image-only,
+ * no text layer) — the B3 leak shape. A whole-document char threshold sees page 0's text and mislabels
+ * the file "text", so page 1's burned-in PII would get zero redaction and a blind verify.
+ */
+async function buildMixedPdf(): Promise<ArrayBuffer> {
+  const mupdf: any = await import("mupdf");
+  const doc = mupdf.PDFDocument.openDocument(readFileSync(abs(TEXT_PDF)), "application/pdf"); // page 0: digital text
+  const pix = doc.loadPage(0).toPixmap(mupdf.Matrix.scale(200 / 72, 200 / 72), mupdf.ColorSpace.DeviceRGB, false);
+  const imgRef = doc.addImage(new mupdf.Image(pix));
+  const resources = doc.addObject({ XObject: { Img: imgRef } });
+  const wPt = (pix.getWidth() * 72) / 200;
+  const hPt = (pix.getHeight() * 72) / 200;
+  const page = doc.addPage([0, 0, wPt, hPt], 0, resources, `q ${wPt} 0 0 ${hPt} 0 0 cm /Img Do Q`);
+  doc.insertPage(-1, page); // append as page 1 (image-only)
+  return new Uint8Array(doc.saveToBuffer({ garbage: "deduplicate" }).asUint8Array()).buffer;
+}
+
 const word = (text: string, confidence: number): OcrWord => ({ text, confidence, bbox: { x0: 100, y0: 100, x1: 300, y1: 140 } });
 const ocrOf =
   (page: OcrPageResult) =>
@@ -69,5 +87,32 @@ describe("scan routing (Stage 5, model-free)", () => {
     await expect(redactFile("scan.pdf", scan, anonymizeDeterministic, { scanOcr: false })).rejects.toThrow(
       "NO_TEXT_LAYER",
     );
+  });
+});
+
+describe("mixed digital+scanned classification (B3 — per-page, not whole-document)", () => {
+  it("classifies a mixed PDF (one image-only page) as scan, not text", async () => {
+    // A whole-document 3-char threshold sees page 0's text and returns false → the text path would redact
+    // only page 0 and leave page 1's burned-in PII untouched with a blind verify. Per-page must catch it.
+    expect(await isScannedPdf(await buildMixedPdf())).toBe(true);
+  });
+
+  it("refuses a mixed PDF on the text path (flag OFF) instead of shipping page 2 untouched", async () => {
+    // The B3 leak: with OCR off, the file must NOT come back as a normally-redacted "text" PDF whose
+    // image-only page is silently unredacted. Fail closed with NO_TEXT_LAYER.
+    const mixed = await buildMixedPdf();
+    await expect(
+      redactFile("mixed.pdf", mixed, anonymizeDeterministic, { scanOcr: false }),
+    ).rejects.toThrow("NO_TEXT_LAYER");
+  });
+
+  it("routes a mixed PDF through OCR when the flag is ON (every page rasterized + read)", async () => {
+    const mixed = await buildMixedPdf();
+    const { bytes } = await redactFile("mixed.pdf", mixed, anonymizeDeterministic, {
+      scanOcr: true,
+      ocr: ocrOf(cleanNoPii), // no PII → nothing redacted → bytes returned (both pages went through OCR)
+    });
+    expect(bytes).toBeInstanceOf(Uint8Array);
+    expect(bytes && bytes.length).toBeGreaterThan(0);
   });
 });
