@@ -45,6 +45,9 @@ const CSP = [
   "worker-src 'self' blob:",
   // blob: — onnxruntime-web's threaded backend fetches its wasm / spawns workers via blob URLs.
   "connect-src 'self' blob: https://huggingface.co https://*.hf.co https://cdn.jsdelivr.net",
+  // WebRTC reaches hosts outside connect-src (ICE/STUN/data channels) — block it outright; the app
+  // has no WebRTC use. Belt to the monitor's RTCPeerConnection suspenders (lib/networkMonitor.ts).
+  "webrtc 'block'",
 ].join("; ");
 
 /**
