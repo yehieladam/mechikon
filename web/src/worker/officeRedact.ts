@@ -423,9 +423,21 @@ function numberIn(name: string): number {
  */
 const DOCX_TEXT_TAGS = ["w:t", "w:delText", "w:instrText"] as const;
 
-/** Redact a .docx by overlaying placeholders onto its text runs (incl. tracked changes + fields). */
+/** A docx chart part — its data cache (`<c:v>`) copies cell values (incl. names/labels) into the doc. */
+const DOCX_CHART = /^word\/charts\/chart\d*\.xml$/;
+
+/** Redact a .docx by overlaying placeholders onto its text runs (incl. tracked changes + fields) and its
+ * embedded-chart data caches (`word/charts/* <c:v>`, the xlsx side already covers `xl/charts/`). */
 export function redactDocx(buffer: ArrayBuffer, anonymize: Anonymize = anonymizeDeterministic): Promise<RedactedFile> {
-  return redactOffice(buffer, (name) => DOCX_PART.test(name), docxOrder, () => DOCX_TEXT_TAGS, () => "w:p", () => false, anonymize);
+  return redactOffice(
+    buffer,
+    (name) => DOCX_PART.test(name) || DOCX_CHART.test(name),
+    docxOrder,
+    (name) => (DOCX_CHART.test(name) ? ["c:v"] : DOCX_TEXT_TAGS),
+    (name) => (DOCX_CHART.test(name) ? "c:pt" : "w:p"),
+    () => false,
+    anonymize,
+  );
 }
 
 /** A worksheet part (holds inline strings and numeric cells). */

@@ -299,6 +299,22 @@ describe("redactOffice — embedded objects (B4, fail closed)", () => {
   });
 });
 
+describe("redactDocx — chart data cache (word/charts/*)", () => {
+  it("redacts a person name cached in a docx chart (<c:v>)", async () => {
+    const chart = `<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea><c:ser><c:cat><c:strRef><c:strCache><c:pt idx="0"><c:v>דנה כהן</c:v></c:pt></c:strCache></c:strRef></c:cat></c:ser></c:plotArea></c:chart></c:chartSpace>`;
+    const doc = `<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>גרף מכירות</w:t></w:r></w:p></w:body></w:document>`;
+    const detectName: Anonymize = (t) => anonymizeManualOnly(t, ["דנה כהן"]);
+    const zip = new JSZip();
+    zip.file("[Content_Types].xml", "<Types/>");
+    zip.file("word/document.xml", doc);
+    zip.file("word/charts/chart1.xml", chart);
+    const { bytes } = await redactDocx(await zip.generateAsync({ type: "arraybuffer" }), detectName);
+    const out = await (await JSZip.loadAsync(bytes)).file("word/charts/chart1.xml")!.async("string");
+    expect(out).not.toContain("דנה כהן");
+    expect(out).toMatch(/\[TERM_\d+\]/);
+  });
+});
+
 describe("redactDocx — tracked changes + fields (silent-leak fix)", () => {
   const DOC = (bodyInner: string) => `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
