@@ -254,6 +254,8 @@ export function App() {
   // the decompressed ceiling (a zip bomb); "pages" = a PDF over the page cap. Clear refusals, no crash.
   const [limitNotice, setLimitNotice] = useState<null | "size" | "pages">(null);
   const [scannedNotice, setScannedNotice] = useState(false);
+  // Legacy binary .xls (B7): SheetJS removed, so a .xls is refused with a "re-save as .xlsx" hint.
+  const [legacyXlsNotice, setLegacyXlsNotice] = useState(false);
   const [formulaNotice, setFormulaNotice] = useState(false);
   const [selfVerifyNotice, setSelfVerifyNotice] = useState(false);
   // Mixed digital+scanned PDF (B3): image-only pages we could not verify clean. The file is still
@@ -446,6 +448,7 @@ export function App() {
       setStatus("reading");
       setFileError(false);
       setScannedNotice(false);
+      setLegacyXlsNotice(false);
       setLimitNotice(null);
       setFormulaNotice(false);
       setSelfVerifyNotice(false);
@@ -518,6 +521,10 @@ export function App() {
           // Absurd page count (B8) — refuse before the per-page loops pin the worker.
           setSource(null);
           setLimitNotice("pages");
+        } else if (error instanceof Error && error.message.includes("LEGACY_XLS_UNSUPPORTED")) {
+          // Legacy binary .xls (B7) — SheetJS removed; tell the user to re-save as .xlsx.
+          setSource(null);
+          setLegacyXlsNotice(true);
         } else if (error instanceof Error && error.message.includes("XLSX_FORMULA_PII")) {
           // A number produced by a formula can't be safely overlaid (recalc regenerates it) — refuse.
           setSource(null);
@@ -1130,7 +1137,7 @@ export function App() {
                 {t("input.upload")}
                 <input
                   type="file"
-                  accept=".docx,.xlsx,.xls,.csv,.pdf,.txt"
+                  accept=".docx,.xlsx,.csv,.pdf,.txt"
                   className="hidden"
                   disabled={busy}
                   onChange={(event) => {
@@ -1186,6 +1193,14 @@ export function App() {
               role="alert"
             >
               {limitNotice === "pages" ? t("input.pdfTooManyPages") : t("input.fileTooLarge")}
+            </div>
+          )}
+          {legacyXlsNotice && (
+            <div
+              className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-[13px] leading-relaxed text-amber-800"
+              role="alert"
+            >
+              {t("input.legacyXls")}
             </div>
           )}
           {formulaNotice && (

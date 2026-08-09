@@ -102,6 +102,13 @@ export function createInflationBudget(limitBytes: number = MAX_ZIP_INFLATED_BYTE
 export const OFFICE_SELFVERIFY_FAILED = "OFFICE_SELFVERIFY_FAILED";
 
 /**
+ * Thrown for a legacy binary `.xls` upload (B7). The only reader of that format was SheetJS (`xlsx`),
+ * removed for unpatched Prototype-Pollution + ReDoS advisories. Modern `.xlsx` uses the JSZip overlay
+ * path (redactXlsx) and needs no such parser; a `.xls` is refused with a "re-save as .xlsx" hint.
+ */
+export const LEGACY_XLS_UNSUPPORTED = "LEGACY_XLS_UNSUPPORTED";
+
+/**
  * Embedded objects (B4) are copied through verbatim — the overlay never opens them and the office
  * self-verify only scans XML/rels parts, so an embed's bytes are otherwise un-scanned. Refusing on mere
  * PRESENCE was too broad: Word stores EVERY native chart's data as an embedded `.xlsx` and legacy
@@ -626,8 +633,13 @@ export async function redactFile(
       const { redactPdf } = await import("./pdfRedact");
       return redactPdf(buffer, anonymize);
     }
+    case "xls":
+      // Legacy binary .xls (B7): its only reader was SheetJS, removed for unpatched
+      // Prototype-Pollution + ReDoS. Refuse with a clear code the App turns into a "re-save as .xlsx"
+      // hint — never route untrusted bytes into a vulnerable parser.
+      throw new Error(LEGACY_XLS_UNSUPPORTED);
     default:
-      // xls (legacy binary, not a zip): detect + preview only, no redacted download.
+      // Any other type we can still read as text (detect + preview only, no redacted download).
       return { result: await anonymize(await extractText(fileName, buffer)) };
   }
 }
