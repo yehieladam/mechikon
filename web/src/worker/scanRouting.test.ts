@@ -10,7 +10,8 @@ import { describe, expect, it } from "vitest";
 import { anonymizeDeterministic } from "@engine/pipeline";
 import type { OcrPageResult, OcrWord } from "@engine/ocrTypes";
 import { redactFile } from "./officeRedact";
-import { isScannedPdf } from "./pdfRedact";
+import { isScannedPdf, extractPdfMapped } from "./pdfRedact";
+import { collectOutlineItems } from "./pdfSanitize";
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- mupdf node surface is untyped */
 function abs(rel: string): string {
@@ -33,10 +34,71 @@ async function buildScanPdf(): Promise<ArrayBuffer> {
   return new Uint8Array(doc.saveToBuffer({ garbage: "deduplicate" }).asUint8Array()).buffer;
 }
 
+/**
+ * Build a MIXED PDF: page 0 is the original digital text page, page 1 is a full-page image (image-only,
+ * no text layer) — the B3 leak shape. A whole-document char threshold sees page 0's text and mislabels
+ * the file "text", so page 1's burned-in PII would get zero redaction and a blind verify.
+ */
+async function buildMixedPdf(): Promise<ArrayBuffer> {
+  const mupdf: any = await import("mupdf");
+  const doc = mupdf.PDFDocument.openDocument(readFileSync(abs(TEXT_PDF)), "application/pdf"); // page 0: digital text
+  const pix = doc.loadPage(0).toPixmap(mupdf.Matrix.scale(200 / 72, 200 / 72), mupdf.ColorSpace.DeviceRGB, false);
+  const imgRef = doc.addImage(new mupdf.Image(pix));
+  const resources = doc.addObject({ XObject: { Img: imgRef } });
+  const wPt = (pix.getWidth() * 72) / 200;
+  const hPt = (pix.getHeight() * 72) / 200;
+  const page = doc.addPage([0, 0, wPt, hPt], 0, resources, `q ${wPt} 0 0 ${hPt} 0 0 cm /Img Do Q`);
+  doc.insertPage(-1, page); // append as page 1 (image-only)
+  return new Uint8Array(doc.saveToBuffer({ garbage: "deduplicate" }).asUint8Array()).buffer;
+}
+
+/** Build an image-only (scanned) PDF that carries ONE outline (bookmark) whose title holds PII. */
+async function buildScanPdfWithBookmark(title: string): Promise<ArrayBuffer> {
+  const mupdf: any = await import("mupdf");
+  const src = mupdf.PDFDocument.openDocument(readFileSync(abs(TEXT_PDF)), "application/pdf");
+  const pix = src.loadPage(0).toPixmap(mupdf.Matrix.scale(200 / 72, 200 / 72), mupdf.ColorSpace.DeviceRGB, false);
+  const doc = new mupdf.PDFDocument();
+  const imgRef = doc.addImage(new mupdf.Image(pix));
+  const resources = doc.addObject({ XObject: { Img: imgRef } });
+  const wPt = (pix.getWidth() * 72) / 200;
+  const hPt = (pix.getHeight() * 72) / 200;
+  const page = doc.addPage([0, 0, wPt, hPt], 0, resources, `q ${wPt} 0 0 ${hPt} 0 0 cm /Img Do Q`);
+  doc.insertPage(-1, page);
+  // Attach a bookmark: Root -> Outlines -> First/Last -> item{ Title }.
+  const item = doc.newDictionary();
+  item.put("Title", doc.newString(title));
+  const itemRef = doc.addObject(item);
+  const outlines = doc.newDictionary();
+  outlines.put("Type", doc.newName("Outlines"));
+  outlines.put("First", itemRef);
+  outlines.put("Last", itemRef);
+  outlines.put("Count", doc.newInteger(1));
+  const outlinesRef = doc.addObject(outlines);
+  item.put("Parent", outlinesRef);
+  doc.getTrailer().get("Root").put("Outlines", outlinesRef);
+  return new Uint8Array(doc.saveToBuffer({ garbage: "deduplicate" }).asUint8Array()).buffer;
+}
+
+/** Re-open produced bytes and return every outline title (for the leak assertion). */
+async function outlineTitlesOf(bytes: Uint8Array): Promise<string[]> {
+  const mupdf: any = await import("mupdf");
+  const doc = mupdf.PDFDocument.openDocument(bytes, "application/pdf");
+  try {
+    return collectOutlineItems(doc).map((item) => item.title);
+  } finally {
+    doc.destroy();
+  }
+}
+
 const word = (text: string, confidence: number): OcrWord => ({ text, confidence, bbox: { x0: 100, y0: 100, x1: 300, y1: 140 } });
 const ocrOf =
   (page: OcrPageResult) =>
   async (): Promise<OcrPageResult> => page;
+/** Return a different OCR result per page in order (call N -> pages[N]), for mixed produce+warn tests. */
+const ocrPerPage = (pages: OcrPageResult[]) => {
+  let call = 0;
+  return async (): Promise<OcrPageResult> => pages[Math.min(call++, pages.length - 1)];
+};
 const cleanNoPii: OcrPageResult = { words: [word("שלום", 90), word("עולם", 90)], meanConfidence: 90, imageWidth: 1000, imageHeight: 1400 };
 const lowConf: OcrPageResult = { words: [word("טשטוש", 40), word("רעש", 40)], meanConfidence: 40, imageWidth: 1000, imageHeight: 1400 };
 /* eslint-enable @typescript-eslint/no-explicit-any */
@@ -69,5 +131,72 @@ describe("scan routing (Stage 5, model-free)", () => {
     await expect(redactFile("scan.pdf", scan, anonymizeDeterministic, { scanOcr: false })).rejects.toThrow(
       "NO_TEXT_LAYER",
     );
+  });
+});
+
+describe("mixed digital+scanned PDF — produce + per-page warning (owner decision, B3)", () => {
+  // A mixed file has at least one real text page AND one or more image-only pages. It is NOT refused for
+  // containing image page(s): the text pages are redacted and the file is produced, with the image-only
+  // pages we could not verify clean returned in `unverifiedImagePages` (1-based) so the UI can warn.
+
+  it("classifies a mixed PDF (one image-only page) as scan (routes to OCR when the flag is on)", async () => {
+    expect(await isScannedPdf(await buildMixedPdf())).toBe(true);
+  });
+
+  it("text path (flag OFF): redacts the text page's PII, produces the file, flags the image page", async () => {
+    // page 0 = digital text carrying the fixture ID 123456709; page 1 = image-only. The text page is
+    // redacted and the file produced (no refusal); the unredacted image page is reported for a warning.
+    const mixed = await buildMixedPdf();
+    const { bytes, result, unverifiedImagePages } = await redactFile("mixed.pdf", mixed, anonymizeDeterministic, {
+      scanOcr: false,
+    });
+    expect(bytes).toBeInstanceOf(Uint8Array);
+    expect(unverifiedImagePages).toEqual([2]); // 1-based; the image-only page
+    expect(result.key.some((row) => row.original === "123456709")).toBe(true); // the ID was detected+keyed
+    const outText = await extractPdfMapped((bytes as Uint8Array).slice().buffer);
+    expect(outText.text).not.toContain("123456709"); // page 0's ID is gone from the produced text layer
+  });
+
+  it("OCR path (flag ON): a readable page is redacted, a gate-failing image page is flagged (no refuse)", async () => {
+    // page 0 OCRs cleanly (redacted/verified), page 1 fails the quality gate → produce + list page 1, do
+    // NOT refuse the whole file (it is mixed, not an all-unverified pure scan).
+    const mixed = await buildMixedPdf();
+    const { bytes, unverifiedImagePages } = await redactFile("mixed.pdf", mixed, anonymizeDeterministic, {
+      scanOcr: true,
+      ocr: ocrPerPage([cleanNoPii, lowConf]),
+    });
+    expect(bytes).toBeInstanceOf(Uint8Array);
+    expect(unverifiedImagePages).toEqual([2]);
+  });
+
+  it("OCR path (flag ON): all pages readable → produced with no unverified pages", async () => {
+    const mixed = await buildMixedPdf();
+    const { bytes, unverifiedImagePages } = await redactFile("mixed.pdf", mixed, anonymizeDeterministic, {
+      scanOcr: true,
+      ocr: ocrOf(cleanNoPii),
+    });
+    expect(bytes).toBeInstanceOf(Uint8Array);
+    expect(unverifiedImagePages ?? []).toEqual([]);
+  });
+});
+
+describe("scan path sanitizes outline (bookmark) titles", () => {
+  const PII_TITLE = "יוסי כהן - תיק 4711";
+
+  it("does not ship a PII bookmark title through the OCR path", async () => {
+    // The digital redactPdf path anonymizes outline titles; the scan path only stripped Info/XMP/annots,
+    // so a bookmark like "יוסי כהן - תיק 4711" shipped verbatim. The scan path cannot tie a title to its
+    // OCR-derived key/verify, so it blanks outline titles (fail closed) — no PII survives in navigation.
+    const scan = await buildScanPdfWithBookmark(PII_TITLE);
+    const before = await outlineTitlesOf(new Uint8Array(scan));
+    expect(before).toContain(PII_TITLE); // the fixture really carries the PII bookmark
+
+    const { bytes } = await redactFile("scan.pdf", scan, anonymizeDeterministic, {
+      scanOcr: true,
+      ocr: ocrOf(cleanNoPii),
+    });
+    const after = await outlineTitlesOf(bytes as Uint8Array);
+    expect(after.join("\n")).not.toContain("יוסי"); // no PII name survives in any outline title
+    expect(after.join("\n")).not.toContain("4711"); // nor the case number
   });
 });

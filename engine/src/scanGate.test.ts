@@ -67,4 +67,13 @@ describe("evaluateScanQuality", () => {
     const words = [word(95), word(95), word(95), word(1, " "), word(1, "\t")];
     expect(evaluateScanQuality(page(words)).ok).toBe(true);
   });
+
+  it("8. refuses a page with near-zero recognized words (a lone token cannot certify a page)", () => {
+    // The gate scores only words OCR actually FOUND, so ink tesseract cannot read at all (handwriting,
+    // stamps) contributes nothing. A page that collapses to a single high-confidence token is not
+    // "clean" — it is near-zero recognized text with unread ink, and must fail closed on the strength of
+    // that one token's confidence. Two clean words remain the pass floor (a genuinely sparse page).
+    expect(evaluateScanQuality(page([word(95)])).ok).toBe(false);
+    expect(evaluateScanQuality(page([word(95), word(95)])).ok).toBe(true);
+  });
 });

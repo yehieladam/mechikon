@@ -46,6 +46,11 @@ export interface RedactedFile {
    * that NAMES the unverified `terms` so the user does a targeted 2-second check (owner decision: informed
    * choice, not a silent block). The AI-text/token deliverable stays hard-gated by its own text verify. */
   readonly pdfUnverified?: PdfUnverified;
+  /** 1-based page numbers of image-only pages that were NOT verified clean, on a MIXED digital+scanned
+   * PDF (owner decision: produce + per-page warn, never refuse for containing image pages). Text path
+   * (OCR off): every image-only page — our glyph detection is blind to it. OCR path (on): pages that
+   * failed the scan-quality gate. Absent/empty when there is nothing to warn about. */
+  readonly unverifiedImagePages?: readonly number[];
 }
 
 export interface PdfUnverified {
@@ -63,6 +68,7 @@ export interface FileRedaction {
   readonly result: AnonymizeResult;
   readonly bytes?: Uint8Array;
   readonly pdfUnverified?: PdfUnverified; // see RedactedFile.pdfUnverified
+  readonly unverifiedImagePages?: readonly number[]; // see RedactedFile.unverifiedImagePages
 }
 
 /** Thrown when an xlsx has PII in a FORMULA cell — refused rather than under-redacted (surfaced in UI). */
