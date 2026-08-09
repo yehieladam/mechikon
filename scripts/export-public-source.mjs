@@ -224,9 +224,11 @@ function applyTransforms(repoRoot, outDir) {
   for (const snippet of ESLINT_DROP_INLINE) eslint = eslint.replaceAll(snippet, "");
   writeText(eslintPath, eslint);
 
-  // NOTICE / README.md — exact texts published in the public repo.
+  // NOTICE / README.md — exact texts published in the public repo. Normalize to LF:
+  // a checkout with core.autocrlf=true smudges the templates to CRLF on disk.
   for (const { from, to } of TEMPLATES) {
-    fs.copyFileSync(path.join(repoRoot, TEMPLATE_DIR, from), path.join(outDir, to));
+    const text = readText(path.join(repoRoot, TEMPLATE_DIR, from)).replaceAll("\r\n", "\n");
+    writeText(path.join(outDir, to), text);
   }
 }
 
