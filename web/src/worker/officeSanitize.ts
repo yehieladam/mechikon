@@ -76,7 +76,35 @@ export async function sanitizeOfficeMetadata(zip: JSZip): Promise<void> {
   await editPart(zip, "docProps/core.xml", (xml) => blankElementText(xml, CORE_TAGS));
   await editPart(zip, "docProps/app.xml", (xml) => blankElementText(xml, APP_TAGS));
   await editPart(zip, "docProps/custom.xml", (xml) => blankElementText(xml, CUSTOM_STRING_TAGS));
-  await editMatching(zip, /^word\/comments\.xml$/, (xml) => blankAttr(xml, ["w:author", "w:initials"]));
+  // Author names are stamped ACROSS word/*.xml, not just comments: tracked revisions (<w:ins>/<w:del>
+  // w:author) live in document.xml, and word/people.xml is a registry of reviewer display names
+  // (w15:author / w15:userId). Blank the author/initials/display-name attributes wherever they appear.
+  await editMatching(zip, /^word\/[^/]+\.xml$/, (xml) =>
+    blankAttr(xml, ["w:author", "w:initials", "w15:author", "w15:userId"]),
+  );
   await editMatching(zip, /^xl\/comments\d*\.xml$/, (xml) => blankElementText(xml, ["author"]));
   await editMatching(zip, /^xl\/persons\/person\d*\.xml$/, (xml) => blankAttr(xml, ["displayName"]));
+  await removeThumbnail(zip);
+}
+
+/** Drop a `<Relationship …>` whose Target points at docProps/thumbnail, keeping every other relationship. */
+function stripThumbnailRel(xml: string): string {
+  return xml.replace(/<Relationship\b[^>]*Target="[^"]*docProps\/thumbnail[^"]*"[^>]*\/>/gi, "");
+}
+
+/**
+ * Delete `docProps/thumbnail.*` and its package relationship. The thumbnail is a rendered raster preview
+ * of the original page 1 — a picture of the un-redacted content that no text pass can clean — so it is
+ * removed outright, not blanked. The relationship in `_rels/.rels` is stripped too so the package stays
+ * consistent (a dangling rel to a missing part makes Office flag the file as corrupt).
+ */
+async function removeThumbnail(zip: JSZip): Promise<void> {
+  const thumbs = Object.keys(zip.files).filter((name) => /^docProps\/thumbnail\.[^/]+$/i.test(name));
+  if (thumbs.length === 0) {
+    return;
+  }
+  for (const name of thumbs) {
+    zip.remove(name);
+  }
+  await editPart(zip, "_rels/.rels", stripThumbnailRel);
 }

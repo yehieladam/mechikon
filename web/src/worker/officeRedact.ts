@@ -23,6 +23,7 @@ import { anonymizeDeterministic, detectDeterministic } from "@engine/pipeline";
 import { applyOverlay, toReplacements, type Segment } from "@engine/overlay";
 import { decodeXml, encodeXml } from "@engine/xml";
 import { officeLeakScan } from "@engine/officeVerify";
+import { layerB } from "@engine/pdfVerify";
 import { sanitizeOfficeMetadata } from "./officeSanitize";
 import { extractText } from "./extract";
 // Type-only (erased at runtime) — avoids an officeRedact <-> scanRedact require cycle.
@@ -69,6 +70,17 @@ export const XLSX_FORMULA_PII = "XLSX_FORMULA_PII";
 
 /** Thrown when an original PII value still appears in ANY text part of the output — refuse, never ship. */
 export const OFFICE_SELFVERIFY_FAILED = "OFFICE_SELFVERIFY_FAILED";
+
+/**
+ * Embedded objects (B4) are copied through verbatim — the overlay never opens them and the office
+ * self-verify only scans XML/rels parts, so an embed's bytes are otherwise un-scanned. Refusing on mere
+ * PRESENCE was too broad: Word stores EVERY native chart's data as an embedded `.xlsx` and legacy
+ * equations as `oleObject*.bin`, so a presence guard rejected most real business documents with a
+ * misleading "PII survived" notice. Instead we look INSIDE (see assertEmbedsClean) and refuse only on
+ * actual PII, so a clean chart/equation embed passes through byte-identical.
+ */
+const OOXML_EMBED = /(^|\/)embeddings\/[^/]*\.(xlsx|docx|pptx|xlsm|docm|pptm)$/i;
+const OLE_EMBED = /(^|\/)embeddings\/[^/]*\.bin$|(^|\/)oleobject\d*\.bin$/i;
 
 /** A region of one XML part to rewrite in place. "text" = a text-node's inner; "numcell" = a whole `<c>`. */
 interface Edit {
@@ -171,19 +183,24 @@ function collectNumericEdits(part: string, path: string, order: number): Edit[] 
     if (typeMatch !== null && typeMatch[1] === "s") {
       continue; // shared-string index — must stay byte-identical
     }
+    const isFormula = /<f[\s>/]/.test(inner);
     const contributed = numericPii(decodeXml(valueMatch[1]));
-    if (contributed === null) {
+    if (contributed === null && !isFormula) {
       continue; // ordinary number
     }
+    // A numeric-PII match feeds its (leading-zero-restored) value; a formula with no whole-value numeric
+    // match still feeds its FULL cached <v> text, so the whole injected anonymize runs over it — a name,
+    // a mixed string, or an external-workbook cache that hides PII trips the isFormula guard (fail closed)
+    // in redactParts. A formula with no PII stays byte-identical (the region is left unchanged).
     edits.push({
       path,
       kind: "numcell",
       start: match.index,
       end: match.index + full.length,
       group: `${order}:num:${index}`,
-      text: contributed,
+      text: contributed ?? decodeXml(valueMatch[1]),
       cellAttrs: attrs.replace(/\s+t="[^"]*"/g, ""),
-      isFormula: /<f[\s>/]/.test(inner),
+      isFormula,
     });
     index += 1;
   }
@@ -196,12 +213,14 @@ function collectNumericEdits(part: string, path: string, order: number): Edit[] 
  * AnonymizeResult (for the UI chips + restore key).
  */
 async function redactParts(
-  parts: ReadonlyArray<{ path: string; content: string; groupTag: string; numeric: boolean }>,
-  tag: string,
+  parts: ReadonlyArray<{ path: string; content: string; tags: readonly string[]; groupTag: string; numeric: boolean }>,
   anonymize: Anonymize,
 ): Promise<{ updated: Map<string, string>; result: AnonymizeResult }> {
   const perPart = parts.map((part, order) => {
-    const text = collectTextEdits(part.content, part.path, order, tag, part.groupTag);
+    // A part can carry text in more than one element kind (docx: visible <w:t> PLUS deleted-but-retained
+    // <w:delText> and field <w:instrText>; xlsx worksheet: cell <t> PLUS print headers). All are collected
+    // into the same detection stream so hidden text is redacted AND covered by the self-verify.
+    const text = part.tags.flatMap((tag) => collectTextEdits(part.content, part.path, order, tag, part.groupTag));
     const numeric = part.numeric ? collectNumericEdits(part.content, part.path, order) : [];
     return [...text, ...numeric].sort((a, b) => a.start - b.start);
   });
@@ -269,12 +288,13 @@ async function redactOffice(
   buffer: ArrayBuffer,
   matchPart: (name: string) => boolean,
   order: (name: string) => number,
-  tag: string,
+  tagsFor: (name: string) => readonly string[],
   groupTagFor: (name: string) => string,
   numericFor: (name: string) => boolean,
   anonymize: Anonymize,
 ): Promise<RedactedFile> {
   const zip = await loadZip(buffer);
+
   const paths = Object.keys(zip.files)
     .filter((name) => !zip.files[name].dir && matchPart(name))
     .sort((a, b) => order(a) - order(b));
@@ -282,11 +302,12 @@ async function redactOffice(
     paths.map(async (path) => ({
       path,
       content: await zip.files[path].async("string"),
+      tags: tagsFor(path),
       groupTag: groupTagFor(path),
       numeric: numericFor(path),
     })),
   );
-  const { updated, result } = await redactParts(parts, tag, anonymize);
+  const { updated, result } = await redactParts(parts, anonymize);
   for (const [path, content] of updated) {
     zip.file(path, content);
   }
@@ -312,8 +333,74 @@ async function redactOffice(
     throw new Error(`${OFFICE_SELFVERIFY_FAILED}: ${scan.hits.join(", ")}`);
   }
 
+  // B4: inspect embedded objects for actual PII (see assertEmbedsClean) — refuse only on a hit, so a
+  // clean chart-data workbook / legacy-equation blob passes through byte-identical instead of being
+  // refused on presence.
+  await assertEmbedsClean(
+    zip,
+    result.key.map((row) => row.original),
+    anonymize,
+  );
+
   const bytes = await zip.generateAsync({ type: "uint8array" });
   return { bytes, result };
+}
+
+async function tryLoadZip(buffer: ArrayBuffer): Promise<Awaited<ReturnType<typeof loadZip>> | undefined> {
+  try {
+    return await loadZip(buffer);
+  } catch {
+    return undefined; // not a zip (or corrupt) — caller falls back to an opaque byte-scan
+  }
+}
+
+/**
+ * Fail-closed check on embedded objects, scanning CONTENT rather than refusing on presence:
+ *  - a nested OOXML zip (`embeddings/*.xlsx|docx|pptx|…`) is opened and its text parts run through the
+ *    same injected detection; refuse only if the embed itself holds PII. A chart's data workbook with
+ *    no PII passes through untouched.
+ *  - an opaque OLE `.bin` (or an OOXML embed that would not open) is byte-scanned in UTF-8 AND UTF-16LE
+ *    (pdfVerify layer B) for the OUTER document's detected values; refuse only on a hit.
+ */
+async function assertEmbedsClean(
+  zip: Awaited<ReturnType<typeof loadZip>>,
+  needles: readonly string[],
+  anonymize: Anonymize,
+): Promise<void> {
+  for (const name of Object.keys(zip.files)) {
+    const file = zip.files[name];
+    if (file.dir) {
+      continue;
+    }
+    const isOoxml = OOXML_EMBED.test(name);
+    if (!isOoxml && !OLE_EMBED.test(name)) {
+      continue;
+    }
+    const buffer = await file.async("arraybuffer");
+    if (isOoxml) {
+      const inner = await tryLoadZip(buffer);
+      if (inner) {
+        const texts: string[] = [];
+        for (const innerName of Object.keys(inner.files)) {
+          if (!inner.files[innerName].dir && /\.(xml|rels)$/i.test(innerName)) {
+            texts.push(decodeXml(await inner.files[innerName].async("string")));
+          }
+        }
+        const detected = await anonymize(texts.join("\n"));
+        if (detected.key.length > 0) {
+          throw new Error(`${OFFICE_SELFVERIFY_FAILED}: embedded ${name} contains PII`);
+        }
+        continue; // opened + scanned clean
+      }
+      // fell through: unparseable OOXML embed — treat as opaque and byte-scan below
+    }
+    if (needles.length > 0) {
+      const layer = await layerB(new Uint8Array(buffer), needles);
+      if (!layer.pass) {
+        throw new Error(`${OFFICE_SELFVERIFY_FAILED}: embedded ${name} contains PII (${layer.hits.join(", ")})`);
+      }
+    }
+  }
 }
 
 /** Body first, then header1, header2…, then footers, then notes — a stable reading order. */
@@ -329,9 +416,28 @@ function numberIn(name: string): number {
   return match ? Number.parseInt(match[1], 10) : 0;
 }
 
-/** Redact a .docx by overlaying placeholders onto its `<w:t>` runs, preserving everything else. */
+/**
+ * docx text-bearing elements: visible runs `<w:t>`, deleted-but-retained tracked-change text
+ * `<w:delText>`, and field instructions `<w:instrText>` (a HYPERLINK/MERGEFIELD instruction can carry an
+ * email or id). All three feed detection so hidden text is redacted in place and covered by the self-verify.
+ */
+const DOCX_TEXT_TAGS = ["w:t", "w:delText", "w:instrText"] as const;
+
+/** A docx chart part — its data cache (`<c:v>`) copies cell values (incl. names/labels) into the doc. */
+const DOCX_CHART = /^word\/charts\/chart\d*\.xml$/;
+
+/** Redact a .docx by overlaying placeholders onto its text runs (incl. tracked changes + fields) and its
+ * embedded-chart data caches (`word/charts/* <c:v>`, the xlsx side already covers `xl/charts/`). */
 export function redactDocx(buffer: ArrayBuffer, anonymize: Anonymize = anonymizeDeterministic): Promise<RedactedFile> {
-  return redactOffice(buffer, (name) => DOCX_PART.test(name), docxOrder, "w:t", () => "w:p", () => false, anonymize);
+  return redactOffice(
+    buffer,
+    (name) => DOCX_PART.test(name) || DOCX_CHART.test(name),
+    docxOrder,
+    (name) => (DOCX_CHART.test(name) ? ["c:v"] : DOCX_TEXT_TAGS),
+    (name) => (DOCX_CHART.test(name) ? "c:pt" : "w:p"),
+    () => false,
+    anonymize,
+  );
 }
 
 /** A worksheet part (holds inline strings and numeric cells). */
@@ -345,15 +451,73 @@ const XLSX_SHEET = /^xl\/worksheets\/sheet\d+\.xml$/;
  * file header. The `t="inlineStr"` attribute is never mistaken for a `<t>` element (`<t\b` needs `<t`).
  */
 const XLSX_COMMENTS = /^xl\/comments\d*\.xml$/;
+const XLSX_THREADED = /^xl\/threadedComments\/threadedComment\d*\.xml$/;
+const XLSX_DRAWING = /^xl\/drawings\/drawing\d*\.xml$/;
+const XLSX_CHART = /^xl\/charts\/chart\d*\.xml$/;
+const XLSX_WORKBOOK = "xl/workbook.xml";
+
+/**
+ * Print headers/footers live in the worksheet part (`<headerFooter><oddHeader>…`), NOT in a `<t>` node —
+ * so they need their own tags on the worksheet, alongside cell text. All three odd/even/first variants.
+ */
+const XLSX_HEADER_FOOTER_TAGS = [
+  "oddHeader",
+  "evenHeader",
+  "firstHeader",
+  "oddFooter",
+  "evenFooter",
+  "firstFooter",
+] as const;
+
+/**
+ * Every text-bearing xlsx part class, with the element tag(s) that carry its text and the element that
+ * delimits one logical group (a newline is inserted between groups so detection never bridges them).
+ * Beyond the cell text (shared strings, inline worksheet strings) this now also covers the hidden
+ * surfaces that previously shipped un-scanned: worksheet print headers/footers, textboxes in drawings
+ * (`<a:t>`), threaded comments (`<text>`), `<definedName>` constants in the workbook, and chart data
+ * caches (`<c:v>`). Anything not listed here is still swept by the fail-closed self-verify.
+ *
+ * Documented residual: PIVOT caches (`xl/pivotCache/*`) store shared items as ATTRIBUTES (`<s v="…"/>`),
+ * not element text — a value there that also appears in a redacted cell is caught by the self-verify
+ * (which scans raw part content, attributes included); a name existing ONLY in a pivot cache is the one
+ * remaining gap and is left to a follow-up.
+ */
+interface XlsxPartClass {
+  readonly match: (name: string) => boolean;
+  readonly order: (name: string) => number;
+  readonly tags: readonly string[];
+  readonly groupTag: string;
+  readonly numeric: boolean;
+}
+
+const XLSX_PART_CLASSES: readonly XlsxPartClass[] = [
+  { match: (n) => n === "xl/sharedStrings.xml", order: () => 0, tags: ["t"], groupTag: "si", numeric: false },
+  {
+    match: (n) => XLSX_SHEET.test(n),
+    order: (n) => 1 + numberIn(n),
+    tags: ["t", ...XLSX_HEADER_FOOTER_TAGS],
+    groupTag: "c",
+    numeric: true,
+  },
+  { match: (n) => XLSX_COMMENTS.test(n), order: (n) => 1000 + numberIn(n), tags: ["t"], groupTag: "comment", numeric: false },
+  { match: (n) => XLSX_THREADED.test(n), order: (n) => 2000 + numberIn(n), tags: ["text"], groupTag: "threadedComment", numeric: false },
+  { match: (n) => XLSX_DRAWING.test(n), order: (n) => 3000 + numberIn(n), tags: ["a:t"], groupTag: "a:p", numeric: false },
+  { match: (n) => XLSX_CHART.test(n), order: (n) => 4000 + numberIn(n), tags: ["c:v"], groupTag: "c:pt", numeric: false },
+  { match: (n) => n === XLSX_WORKBOOK, order: () => 5000, tags: ["definedName"], groupTag: "definedName", numeric: false },
+];
+
+function xlsxClass(name: string): XlsxPartClass | undefined {
+  return XLSX_PART_CLASSES.find((cls) => cls.match(name));
+}
 
 export function redactXlsx(buffer: ArrayBuffer, anonymize: Anonymize = anonymizeDeterministic): Promise<RedactedFile> {
   return redactOffice(
     buffer,
-    (name) => name === "xl/sharedStrings.xml" || XLSX_SHEET.test(name) || XLSX_COMMENTS.test(name),
-    (name) => (name === "xl/sharedStrings.xml" ? 0 : XLSX_COMMENTS.test(name) ? 1000 + numberIn(name) : 1 + numberIn(name)),
-    "t",
-    (name) => (name === "xl/sharedStrings.xml" ? "si" : XLSX_COMMENTS.test(name) ? "comment" : "c"),
-    (name) => XLSX_SHEET.test(name),
+    (name) => xlsxClass(name) !== undefined,
+    (name) => xlsxClass(name)?.order(name) ?? 0,
+    (name) => xlsxClass(name)?.tags ?? ["t"],
+    (name) => xlsxClass(name)?.groupTag ?? "c",
+    (name) => xlsxClass(name)?.numeric ?? false,
     anonymize,
   );
 }

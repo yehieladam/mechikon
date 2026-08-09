@@ -72,4 +72,35 @@ describe("sanitizeOfficeMetadata", () => {
     expect(out).toContain("<author></author>");
     expect(out).not.toContain("משה לוי");
   });
+
+  it("8. blanks w:author/w:initials on a tracked revision in document.xml (not only comments.xml)", async () => {
+    // A tracked insertion/deletion stamps the reviewer's name as w:author on <w:ins>/<w:del> in the body.
+    const doc = `<w:document xmlns:w="w"><w:body><w:p><w:ins w:id="1" w:author="יעל כהן" w:initials="יכ" w:date="2026-01-01T00:00:00Z"><w:r><w:t>x</w:t></w:r></w:ins></w:p></w:body></w:document>`;
+    const out = (await run({ "word/document.xml": doc }))["word/document.xml"];
+    expect(out).toContain('w:author=""');
+    expect(out).toContain('w:initials=""');
+    expect(out).not.toContain("יעל כהן");
+    expect(out).toContain('w:date="2026-01-01T00:00:00Z"'); // timestamp kept
+  });
+
+  it("9. blanks author + display names in word/people.xml (revision-author registry)", async () => {
+    const people = `<w15:people xmlns:w15="w15"><w15:person w15:author="משה לוי"><w15:presenceInfo w15:providerId="None" w15:userId="משה לוי"/></w15:person></w15:people>`;
+    const out = (await run({ "word/people.xml": people }))["word/people.xml"];
+    expect(out).not.toContain("משה לוי");
+    expect(out).toContain('w15:author=""');
+  });
+
+  it("7. removes docProps/thumbnail.* (a rendered image of the original page 1) and its relationship", async () => {
+    const zip = new JSZip();
+    zip.file("docProps/thumbnail.jpeg", new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3]));
+    zip.file(
+      "_rels/.rels",
+      `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/thumbnail" Target="docProps/thumbnail.jpeg"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`,
+    );
+    await sanitizeOfficeMetadata(zip);
+    expect(zip.file("docProps/thumbnail.jpeg")).toBeNull();
+    const rels = await zip.file("_rels/.rels")!.async("string");
+    expect(rels).not.toContain("thumbnail");
+    expect(rels).toContain('Target="word/document.xml"'); // other relationships preserved
+  });
 });

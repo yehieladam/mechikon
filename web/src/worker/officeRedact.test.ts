@@ -9,7 +9,8 @@
 import { describe, expect, it } from "vitest";
 import JSZip from "jszip";
 import { restore } from "@engine/restore";
-import { redactDocx, redactXlsx, XLSX_FORMULA_PII, OFFICE_SELFVERIFY_FAILED } from "./officeRedact";
+import { anonymizeManualOnly } from "@engine/pipeline";
+import { redactDocx, redactXlsx, XLSX_FORMULA_PII, OFFICE_SELFVERIFY_FAILED, type Anonymize } from "./officeRedact";
 import { restoreFile } from "./restoreFile";
 
 /** Wrap worksheet rows in a valid sheet part; optionally add a shared-string table. */
@@ -223,6 +224,133 @@ describe("redactOffice — metadata strip + comment routing (2b)", () => {
   });
 });
 
+describe("redactOffice — embedded objects (B4, fail closed)", () => {
+  const BODY = (text: string) => `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body><w:p><w:r><w:t xml:space="preserve">${text}</w:t></w:r></w:p></w:body>
+</w:document>`;
+
+  /** Build a nested xlsx embed carrying `cellText` in one shared string. */
+  async function embeddedXlsx(cellText: string): Promise<Uint8Array> {
+    const embedded = new JSZip();
+    embedded.file("[Content_Types].xml", "<Types/>");
+    embedded.file(
+      "xl/sharedStrings.xml",
+      `<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><si><t>${cellText}</t></si></sst>`,
+    );
+    return embedded.generateAsync({ type: "uint8array" });
+  }
+
+  it("B4. refuses a docx that embeds an OOXML object holding a PII table (embed opened + scanned)", async () => {
+    const embeddedBytes = await embeddedXlsx("מספר זהות 123456709");
+    const zip = new JSZip();
+    zip.file("[Content_Types].xml", "<Types/>");
+    zip.file("word/document.xml", BODY("ראה קובץ מצורף"));
+    zip.file("word/embeddings/Microsoft_Excel_Worksheet1.xlsx", embeddedBytes);
+    await expect(redactDocx(await zip.generateAsync({ type: "arraybuffer" }))).rejects.toThrow(
+      OFFICE_SELFVERIFY_FAILED,
+    );
+  });
+
+  it("B4a. PRODUCES a docx embedding a NON-PII xlsx (chart data), embed passes through byte-identical", async () => {
+    // Word stores every native chart's data as word/embeddings/*.xlsx — refusing on presence rejected
+    // every charted business doc. A clean embed must pass through untouched.
+    const embeddedBytes = await embeddedXlsx("רבעון סכום מכירות");
+    const zip = new JSZip();
+    zip.file("[Content_Types].xml", "<Types/>");
+    zip.file("word/document.xml", BODY("לקוח 123456709")); // outer HAS PII → gets redacted
+    zip.file("word/embeddings/Microsoft_Excel_Worksheet1.xlsx", embeddedBytes);
+    const { bytes } = await redactDocx(await zip.generateAsync({ type: "arraybuffer" }));
+    const out = await JSZip.loadAsync(bytes);
+    const embedOut = await out.file("word/embeddings/Microsoft_Excel_Worksheet1.xlsx")!.async("uint8array");
+    expect(Array.from(embedOut)).toEqual(Array.from(embeddedBytes)); // byte-identical
+  });
+
+  it("B4b. refuses a docx embedding an xlsx that carries a client ID", async () => {
+    const embeddedBytes = await embeddedXlsx("לקוח 040493389 בטבלה");
+    const zip = new JSZip();
+    zip.file("[Content_Types].xml", "<Types/>");
+    zip.file("word/document.xml", BODY("שלום")); // outer clean; only the embed carries PII
+    zip.file("word/embeddings/Microsoft_Excel_Worksheet1.xlsx", embeddedBytes);
+    await expect(redactDocx(await zip.generateAsync({ type: "arraybuffer" }))).rejects.toThrow(
+      OFFICE_SELFVERIFY_FAILED,
+    );
+  });
+
+  it("B4c. PRODUCES a docx with a clean oleObject*.bin (legacy equation), byte-scan finds nothing", async () => {
+    const zip = new JSZip();
+    zip.file("[Content_Types].xml", "<Types/>");
+    zip.file("word/document.xml", BODY("לקוח 123456709")); // outer PII → gives the byte-scan needles
+    zip.file("word/embeddings/oleObject1.bin", new Uint8Array([0xd0, 0xcf, 0x11, 0xe0, 1, 2, 3]));
+    const { bytes } = await redactDocx(await zip.generateAsync({ type: "arraybuffer" }));
+    const out = await JSZip.loadAsync(bytes);
+    expect(await out.file("word/embeddings/oleObject1.bin")!.async("uint8array")).toBeTruthy();
+  });
+
+  it("B4d. refuses an oleObject*.bin whose bytes carry an outer needle (UTF-8 byte-scan)", async () => {
+    const oleBytes = new TextEncoder().encode("\x00\x00OLEHDR לקוח 123456709 \x00\x00");
+    const zip = new JSZip();
+    zip.file("[Content_Types].xml", "<Types/>");
+    zip.file("word/document.xml", BODY("לקוח 123456709")); // 123456709 becomes a needle
+    zip.file("word/embeddings/oleObject1.bin", oleBytes);
+    await expect(redactDocx(await zip.generateAsync({ type: "arraybuffer" }))).rejects.toThrow(
+      OFFICE_SELFVERIFY_FAILED,
+    );
+  });
+});
+
+describe("redactDocx — chart data cache (word/charts/*)", () => {
+  it("redacts a person name cached in a docx chart (<c:v>)", async () => {
+    const chart = `<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea><c:ser><c:cat><c:strRef><c:strCache><c:pt idx="0"><c:v>דנה כהן</c:v></c:pt></c:strCache></c:strRef></c:cat></c:ser></c:plotArea></c:chart></c:chartSpace>`;
+    const doc = `<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>גרף מכירות</w:t></w:r></w:p></w:body></w:document>`;
+    const detectName: Anonymize = (t) => anonymizeManualOnly(t, ["דנה כהן"]);
+    const zip = new JSZip();
+    zip.file("[Content_Types].xml", "<Types/>");
+    zip.file("word/document.xml", doc);
+    zip.file("word/charts/chart1.xml", chart);
+    const { bytes } = await redactDocx(await zip.generateAsync({ type: "arraybuffer" }), detectName);
+    const out = await (await JSZip.loadAsync(bytes)).file("word/charts/chart1.xml")!.async("string");
+    expect(out).not.toContain("דנה כהן");
+    expect(out).toMatch(/\[TERM_\d+\]/);
+  });
+});
+
+describe("redactDocx — tracked changes + fields (silent-leak fix)", () => {
+  const DOC = (bodyInner: string) => `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>${bodyInner}</w:body>
+</w:document>`;
+
+  it("redacts an ID retained inside <w:delText> (tracked deletion), not just visible <w:t>", async () => {
+    // A tracked deletion keeps the deleted text in the file as <w:delText> — invisible in Word's final
+    // view but present in the bytes. Currently only <w:t> is collected, so this ID sails through.
+    const doc = DOC(
+      `<w:p><w:del w:id="1" w:author="עו״ד"><w:r><w:delText xml:space="preserve">מספר זהות 123456709</w:delText></w:r></w:del></w:p>`,
+    );
+    const zip = new JSZip();
+    zip.file("[Content_Types].xml", "<Types/>");
+    zip.file("word/document.xml", doc);
+    const { bytes, result } = await redactDocx(await zip.generateAsync({ type: "arraybuffer" }));
+    const out = await (await JSZip.loadAsync(bytes)).file("word/document.xml")!.async("string");
+    expect(out).toContain("[ID_1]");
+    expect(out).not.toContain("123456709");
+    expect(result.key.map((r) => r.original)).toContain("123456709");
+  });
+
+  it("redacts an email carried in a field instruction (<w:instrText>)", async () => {
+    const doc = DOC(
+      `<w:p><w:r><w:instrText xml:space="preserve"> HYPERLINK "mailto:test@example.co.il" </w:instrText></w:r></w:p>`,
+    );
+    const zip = new JSZip();
+    zip.file("[Content_Types].xml", "<Types/>");
+    zip.file("word/document.xml", doc);
+    const { bytes } = await redactDocx(await zip.generateAsync({ type: "arraybuffer" }));
+    const out = await (await JSZip.loadAsync(bytes)).file("word/document.xml")!.async("string");
+    expect(out).toContain("[EMAIL_1]");
+    expect(out).not.toContain("test@example.co.il");
+  });
+});
+
 describe("redactXlsx — numeric cells (the silent-leak fix)", () => {
   it("1. redacts a 9-digit ID stored as a NUMBER and keeps the restore mapping", async () => {
     const { bytes, result } = await redactXlsx(
@@ -305,5 +433,92 @@ describe("redactXlsx — numeric cells (the silent-leak fix)", () => {
     // Distinct, non-colliding placeholders.
     const placeholders = result.key.map((r) => r.placeholder);
     expect(new Set(placeholders).size).toBe(placeholders.length);
+  });
+});
+
+describe("redactXlsx — hidden text surfaces (silent-leak fix)", () => {
+  const WORKSHEET = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+  async function partOut(bytes: Uint8Array, path: string): Promise<string> {
+    return (await JSZip.loadAsync(bytes)).file(path)!.async("string");
+  }
+  async function buildZip(files: Record<string, string>): Promise<ArrayBuffer> {
+    const zip = new JSZip();
+    zip.file("[Content_Types].xml", "<Types/>");
+    for (const [path, content] of Object.entries(files)) {
+      zip.file(path, content);
+    }
+    return zip.generateAsync({ type: "arraybuffer" });
+  }
+
+  it("redacts a client name in a worksheet print header (<oddHeader>)", async () => {
+    const sheet = `<?xml version="1.0"?><worksheet xmlns="${WORKSHEET}"><sheetData/><headerFooter><oddHeader>&amp;Cלקוח דנה כהן</oddHeader></headerFooter></worksheet>`;
+    const detectName: Anonymize = (t) => anonymizeManualOnly(t, ["דנה כהן"]);
+    const { bytes } = await redactXlsx(await buildZip({ "xl/worksheets/sheet1.xml": sheet }), detectName);
+    const out = await partOut(bytes, "xl/worksheets/sheet1.xml");
+    expect(out).not.toContain("דנה כהן");
+    expect(out).toMatch(/\[TERM_\d+\]/);
+  });
+
+  it("redacts an ID in a threaded comment (xl/threadedComments/*)", async () => {
+    const tc = `<ThreadedComments xmlns="http://schemas.microsoft.com/office/spreadsheetml/2018/threadedcomments"><threadedComment ref="A1" id="{1}"><text>מספר 123456709</text></threadedComment></ThreadedComments>`;
+    const { bytes } = await redactXlsx(
+      await buildZip({
+        "xl/worksheets/sheet1.xml": `<?xml version="1.0"?><worksheet xmlns="${WORKSHEET}"><sheetData/></worksheet>`,
+        "xl/threadedComments/threadedComment1.xml": tc,
+      }),
+    );
+    const out = await partOut(bytes, "xl/threadedComments/threadedComment1.xml");
+    expect(out).toContain("[ID_1]");
+    expect(out).not.toContain("123456709");
+  });
+
+  it("redacts a phone in a drawing textbox (xl/drawings/* <a:t>)", async () => {
+    const drawing = `<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><xdr:sp><xdr:txBody><a:p><a:r><a:t>טלפון 052-1234567</a:t></a:r></a:p></xdr:txBody></xdr:sp></xdr:wsDr>`;
+    const { bytes } = await redactXlsx(
+      await buildZip({
+        "xl/worksheets/sheet1.xml": `<?xml version="1.0"?><worksheet xmlns="${WORKSHEET}"><sheetData/></worksheet>`,
+        "xl/drawings/drawing1.xml": drawing,
+      }),
+    );
+    const out = await partOut(bytes, "xl/drawings/drawing1.xml");
+    expect(out).toContain("[PHONE_1]");
+    expect(out).not.toContain("1234567");
+  });
+
+  it("redacts an ID constant in a <definedName> (xl/workbook.xml)", async () => {
+    const workbook = `<workbook xmlns="${WORKSHEET}"><definedNames><definedName name="Client">"123456709"</definedName></definedNames><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>`;
+    const { bytes } = await redactXlsx(
+      await buildZip({
+        "xl/workbook.xml": workbook,
+        "xl/worksheets/sheet1.xml": `<?xml version="1.0"?><worksheet xmlns="${WORKSHEET}"><sheetData/></worksheet>`,
+      }),
+    );
+    const out = await partOut(bytes, "xl/workbook.xml");
+    expect(out).toContain("[ID_1]");
+    expect(out).not.toContain("123456709");
+  });
+});
+
+describe("redactXlsx — formula cache PII (full scan, fail closed)", () => {
+  it("refuses a formula cell whose cached <v> hides a phone in a MIXED string", async () => {
+    // numericPii only fires on a whole-value deterministic match; a cached string result carrying a phone
+    // slips past it. The full anonymize must run over the cached <v> so any hit refuses the file.
+    const sheet = `<row r="1"><c r="A1" t="str"><f>CONCATENATE(B1,C1)</f><v>טלפון 052-1234567</v></c></row>`;
+    await expect(redactXlsx(await buildXlsxWith(sheet))).rejects.toThrow(XLSX_FORMULA_PII);
+  });
+
+  it("refuses a formula cell caching a PERSON NAME (full injected anonymize over <v>)", async () => {
+    const sheet = `<row r="1"><c r="A1" t="str"><f>VLOOKUP(B1,D:E,2,0)</f><v>דנה כהן</v></c></row>`;
+    const detectName: Anonymize = (text) => anonymizeManualOnly(text, ["דנה כהן"]);
+    await expect(redactXlsx(await buildXlsxWith(sheet), detectName)).rejects.toThrow(XLSX_FORMULA_PII);
+  });
+
+  it("leaves a NON-PII formula cell byte-identical (no false refuse, no conversion)", async () => {
+    const sheet = `<row r="1"><c r="A1"><f>SUM(B1:B3)</f><v>42</v></c></row>`;
+    const { bytes, result } = await redactXlsx(await buildXlsxWith(sheet));
+    const out = await sheetOut(bytes);
+    expect(out).toContain("<f>SUM(B1:B3)</f><v>42</v>");
+    expect(out).not.toContain("inlineStr");
+    expect(result.key.length).toBe(0);
   });
 });

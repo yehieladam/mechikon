@@ -52,4 +52,41 @@ describe("officeLeakScan", () => {
     expect(result.pass).toBe(true);
     expect(result.hits).toEqual([]);
   });
+
+  it("6. does NOT falsely refuse a name that only appears inside a longer word (whole-word matched)", () => {
+    // The name כהן was redacted ([NAME_1]); the word מכהן ("as he serves") legitimately CONTAINS it. A
+    // space-stripped substring .includes would wrongly flag it — whole-word matching must not.
+    const result = officeLeakScan(
+      parts({ "word/document.xml": "<w:t>[NAME_1] מכהן בתפקידו</w:t>" }),
+      ["כהן"],
+    );
+    expect(result.pass).toBe(true);
+    expect(result.hits).toEqual([]);
+  });
+
+  it("7. still refuses a genuine whole-word survivor of that same name", () => {
+    const result = officeLeakScan(parts({ "word/document.xml": "<w:t>מר כהן הגיע</w:t>" }), ["כהן"]);
+    expect(result.pass).toBe(false);
+    expect(result.hits).toEqual(["word/document.xml: כהן"]);
+  });
+
+  it("8. refuses a MULTI-WORD name whose separator was swapped (hyphen) — whole-word alone would miss it", () => {
+    // Key value "דנה כהן"; the body kept it as "דנה-כהן". Whole-word matching needs the exact space, so
+    // the separator-stripped form must also be checked (bounded by non-word chars) or this leaks.
+    const result = officeLeakScan(parts({ "word/document.xml": "<w:t>עו״ד דנה-כהן</w:t>" }), ["דנה כהן"]);
+    expect(result.pass).toBe(false);
+    expect(result.hits).toEqual(["word/document.xml: דנה כהן"]);
+  });
+
+  it("9. refuses a MULTI-WORD name that was merged (separators removed) as a standalone token", () => {
+    const nbsp = officeLeakScan(parts({ "word/document.xml": "<w:t>דנה כהן</w:t>" }), ["דנה כהן"]);
+    expect(nbsp.pass).toBe(false);
+    const merged = officeLeakScan(parts({ "word/document.xml": "<w:t>מאתדנהכהןבתיק</w:t>" }), ["דנה כהן"]);
+    // Merged and bounded by Hebrew letters on both sides — this is the merged name embedded in a run;
+    // the separator-stripped form is bounded only when standalone, so a genuine standalone merge refuses:
+    const standalone = officeLeakScan(parts({ "word/document.xml": "<w:t>(דנהכהן)</w:t>" }), ["דנה כהן"]);
+    expect(standalone.pass).toBe(false);
+    // ...while the same letters glued inside a longer word are NOT a false refuse.
+    expect(merged.pass).toBe(true);
+  });
 });
