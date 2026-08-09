@@ -1019,6 +1019,8 @@ export function App() {
     { key: "openSource", d: "M9 18l-6-6 6-6m6 12l6-6-6-6" },
   ] as const;
 
+  const faqItems = ["security", "workflow", "key", "detection", "cost"] as const;
+
   return (
     <div dir="rtl" className="min-h-screen overflow-x-hidden bg-white text-ink">
       {showCopyToast && (
@@ -2096,6 +2098,31 @@ export function App() {
                   {t(`trust.items.${item.key}.text`)}
                 </div>
               </div>
+            ))}
+          </div>
+        </section>
+
+        <section id="faq" className="mx-auto mt-16 max-w-2xl scroll-mt-6 px-1">
+          <h2 className="text-center text-lg font-semibold tracking-tight">{t("faq.heading")}</h2>
+          <div className="mt-6 space-y-3">
+            {faqItems.map((key) => (
+              <details
+                key={key}
+                className="group rounded-2xl border border-hairline bg-white px-5 open:shadow-card"
+              >
+                <summary className="flex min-h-[44px] cursor-pointer list-none items-center justify-between gap-3 py-4 text-[15px] font-semibold leading-snug marker:hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/20">
+                  <span>{t(`faq.${key}.q`)}</span>
+                  <svg
+                    className="h-4 w-4 shrink-0 text-zinc-400 transition-transform group-open:rotate-180"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    aria-hidden="true"
+                  >
+                    <path d="M6 9l6 6 6-6" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </summary>
+                <p className="pb-5 text-[13px] leading-relaxed text-zinc-600">{t(`faq.${key}.a`)}</p>
+              </details>
             ))}
           </div>
         </section>
