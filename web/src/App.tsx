@@ -35,6 +35,7 @@ type Source =
 /** AGPL-3.0 §13: users interacting over a network must be offered the corresponding source. */
 const SOURCE_URL = "https://github.com/yehieladam/anon-extension";
 const COPIED_RESET_MS = 1500;
+const COPY_TOAST_MS = 2000;
 /** How long the transient "N names added" notice (M4) stays before it fades out. */
 const NER_ADDED_NOTICE_MS = 4000;
 const MANUAL_ONLY_KEY = "mechikon.manualOnly";
@@ -246,6 +247,7 @@ export function App() {
   const resultRef = useRef(result);
   resultRef.current = result;
   const [copied, setCopied] = useState(false);
+  const [showCopyToast, setShowCopyToast] = useState(false);
   // Clipboard writes can reject (permissions / no focus); surface a copy-failed hint so the user is not
   // left thinking it worked. Separate flags for the two copy affordances so a message never shows in the
   // wrong place.
@@ -897,6 +899,9 @@ export function App() {
       await navigator.clipboard.writeText(t("result.promptPrefix") + result.anonymizedText);
       setCopied(true);
       window.setTimeout(() => setCopied(false), COPIED_RESET_MS);
+      // The AI-instruction disclosure pops as a short toast instead of sitting as permanent clutter.
+      setShowCopyToast(true);
+      window.setTimeout(() => setShowCopyToast(false), COPY_TOAST_MS);
     } catch {
       setCopyError(true);
     }
@@ -1016,6 +1021,17 @@ export function App() {
 
   return (
     <div dir="rtl" className="min-h-screen overflow-x-hidden bg-white text-ink">
+      {showCopyToast && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed inset-x-0 bottom-6 z-50 flex justify-center px-4 animate-[fadeIn_0.2s_ease]"
+        >
+          <div className="max-w-md rounded-2xl bg-ink px-4 py-3 text-center text-[13px] leading-relaxed text-white shadow-card">
+            {t("result.bridge")}
+          </div>
+        </div>
+      )}
       <header className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-x-4 gap-y-1 px-6 py-5">
         <span className="text-[19px] font-semibold tracking-tight" dir="ltr">
           Mechikon
@@ -1495,15 +1511,18 @@ export function App() {
               </div>
             )}
 
-            {manualOnly && result.anonymizedText.trim().length > 0 && (
-              <div className="mb-2 flex items-center gap-2 rounded-xl border border-hairline bg-surface px-3 py-2 text-[13px] leading-relaxed text-zinc-600">
+            {result.anonymizedText.trim().length > 0 && (
+              <div
+                role="note"
+                className="mb-2 flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-[13px] font-semibold leading-relaxed text-emerald-800"
+              >
                 <svg
                   width="16"
                   height="16"
                   viewBox="0 0 24 24"
                   fill="none"
                   aria-hidden="true"
-                  className="shrink-0 text-ink"
+                  className="shrink-0 text-emerald-600"
                 >
                   <path
                     d="M5 3l14 8-6 1.5L11 19 5 3z"
@@ -1603,7 +1622,6 @@ export function App() {
               </div>
             </div>
             {copyError && <p className="mt-2 px-2 text-xs text-amber-600">{t("result.copyFailed")}</p>}
-            <p className="mt-2 px-2 text-xs text-zinc-400">{t("result.clickHint")}</p>
             {manualOnly ? (
               <p className="mt-3 rounded-xl bg-amber-50/60 px-3 py-2 text-xs leading-relaxed text-zinc-600">
                 {t("result.noteManual")}
@@ -1623,36 +1641,8 @@ export function App() {
               </p>
             )}
 
-            {/* Bridge (D4): one restrained sentence that also discloses the copy prepends an AI prompt,
-                plus a link-button that opens the guided restore flow. No multi-node diagram. */}
-            {result.key.length > 0 && (
-              <div className="mt-3 rounded-xl border border-hairline bg-surface px-4 py-3">
-                <p className="text-[13px] leading-relaxed text-zinc-500">{t("result.bridge")}</p>
-                <button
-                  type="button"
-                  onClick={openRestore}
-                  className="mt-1 inline-flex min-h-[44px] items-center gap-1.5 text-[13px] font-medium text-ink underline decoration-zinc-300 underline-offset-2 transition hover:decoration-ink"
-                >
-                  {t("restore.title")}
-                  <svg
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    aria-hidden="true"
-                    className="rtl:rotate-180"
-                  >
-                    <path
-                      d="M9 6l6 6-6 6"
-                      stroke="currentColor"
-                      strokeWidth="1.8"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
-                </button>
-              </div>
-            )}
+            {/* The AI-instruction disclosure pops as a short toast on copy (see onCopy) instead of sitting
+                here as permanent clutter. Restore auto-opens on copy via openRestore. */}
 
             {result.key.length > 0 && (
               <div
@@ -1696,7 +1686,7 @@ export function App() {
                       </svg>
                     </div>
                     <div className="min-w-0">
-                      <div className="text-[13px] font-medium text-ink">{t("key.title")}</div>
+                      <div className="text-[13px] font-medium text-ink">{t("key.createTitle")}</div>
                       {keyEverDownloaded ? (
                         <p className="mt-1 text-xs font-medium leading-relaxed text-amber-800">
                           {t("key.changed")}
