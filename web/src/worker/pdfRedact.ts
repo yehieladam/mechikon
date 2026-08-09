@@ -68,17 +68,22 @@ function imageOnlyPageNumbers(doc: any): number[] {
     const pageArea = Math.max(1, (bounds[2] - bounds[0]) * (bounds[3] - bounds[1]));
     let textChars = 0;
     let maxImageCover = 0;
-    page.toStructuredText("preserve-whitespace,preserve-images").walk({
-      onChar(char: string) {
-        if (char.trim().length > 0) {
-          textChars += 1;
-        }
-      },
-      onImageBlock(bbox: ArrayLike<number>) {
-        const area = Math.max(0, (bbox[2] - bbox[0]) * (bbox[3] - bbox[1]));
-        maxImageCover = Math.max(maxImageCover, area / pageArea);
-      },
-    });
+    const structured = page.toStructuredText("preserve-whitespace,preserve-images");
+    try {
+      structured.walk({
+        onChar(char: string) {
+          if (char.trim().length > 0) {
+            textChars += 1;
+          }
+        },
+        onImageBlock(bbox: ArrayLike<number>) {
+          const area = Math.max(0, (bbox[2] - bbox[0]) * (bbox[3] - bbox[1]));
+          maxImageCover = Math.max(maxImageCover, area / pageArea);
+        },
+      });
+    } finally {
+      structured.destroy(); // free the per-page stext — a many-page doc otherwise grows the WASM heap
+    }
     if (textChars < NO_TEXT_LAYER_MIN_CHARS && maxImageCover >= IMAGE_ONLY_COVER_MIN) {
       pages.push(pageIndex + 1); // 1-based, for the UI warning
     }
@@ -111,22 +116,26 @@ function mappedFromDoc(doc: any): MappedText {
     const structured = doc.loadPage(pageIndex).toStructuredText("preserve-whitespace");
     const lines: { chars: CharBox[] }[] = [];
     let current: CharBox[] | null = null;
-    structured.walk({
-      beginLine() {
-        current = [];
-      },
-      endLine() {
-        if (current) {
-          lines.push({ chars: current });
-          current = null;
-        }
-      },
-      onChar(char: string, _origin: unknown, _font: unknown, _size: unknown, quad: ArrayLike<number>) {
-        if (current) {
-          current.push({ char, quad: Array.from(quad) });
-        }
-      },
-    });
+    try {
+      structured.walk({
+        beginLine() {
+          current = [];
+        },
+        endLine() {
+          if (current) {
+            lines.push({ chars: current });
+            current = null;
+          }
+        },
+        onChar(char: string, _origin: unknown, _font: unknown, _size: unknown, quad: ArrayLike<number>) {
+          if (current) {
+            current.push({ char, quad: Array.from(quad) });
+          }
+        },
+      });
+    } finally {
+      structured.destroy(); // free the per-page stext (quads are copied into `lines` above)
+    }
     pages.push({ pageIndex, lines });
   }
   return buildMappedText(pages);
