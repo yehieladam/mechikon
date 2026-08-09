@@ -553,6 +553,41 @@ describe("redactPdf — strips /A /URI link actions and document JavaScript (inv
     const b = await layerB(bytes, [EMAIL]);
     expect(b.pass).toBe(true);
   });
+
+  /** A one-page PDF with a page-level /AA /O (on-open) JavaScript action whose script embeds PII. */
+  async function pageAaPdf(): Promise<ArrayBuffer> {
+    // reason: mupdf's WASM surface is untyped; narrowly used to author a crafted test PDF.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mupdf = (await import("mupdf")) as any;
+    const doc = new mupdf.PDFDocument();
+    const font = doc.addSimpleFont(new mupdf.Font("Helvetica"));
+    const fonts = doc.newDictionary();
+    fonts.put("F1", font);
+    const resources = doc.newDictionary();
+    resources.put("Font", fonts);
+    doc.insertPage(-1, doc.addPage([0, 0, 612, 792], 0, resources, "BT /F1 12 Tf 50 700 Td (open me) Tj ET"));
+    const pageObj = doc.loadPage(0).getObject();
+    const jsAction = doc.newDictionary();
+    jsAction.put("S", doc.newName("JavaScript"));
+    jsAction.put("JS", doc.newString(`app.alert("id ${JS_ID}");`));
+    const aa = doc.newDictionary();
+    aa.put("O", jsAction); // on page OPEN
+    pageObj.put("AA", aa);
+    return new Uint8Array(doc.saveToBuffer({}).asUint8Array()).buffer as ArrayBuffer;
+  }
+
+  it("strips page-level /AA /O JavaScript — the embedded PII is gone from the bytes", async () => {
+    const buf = await pageAaPdf();
+    const { bytes } = await redactPdf(buf, anonymizeDeterministic);
+    // reason: mupdf's WASM surface is untyped.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mupdf = (await import("mupdf")) as any;
+    const doc = mupdf.PDFDocument.openDocument(bytes, "application/pdf");
+    const aa = doc.getTrailer().get("Root").get("Pages").get("Kids").get(0).get("AA");
+    expect(aa === null || (aa.isNull?.() ?? false)).toBe(true);
+    const b = await layerB(bytes, [JS_ID]);
+    expect(b.pass).toBe(true);
+  });
 });
 
 describe("extractPdfMapped — synthetic (logical-authored) fixture documents the trap", () => {

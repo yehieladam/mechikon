@@ -122,8 +122,9 @@ export function stripAnnotationActions(doc: any): void {
 
 /**
  * Delete document-level JavaScript: the `/Names /JavaScript` name tree (scripts run on open and can
- * embed any document data verbatim) and the catalog's `/AA` additional-actions (JS-only). A
- * JavaScript `/OpenAction` is deleted too; a plain GoTo open destination is kept.
+ * embed any document data verbatim), the catalog's `/AA` additional-actions (JS-only), and every
+ * PAGE's `/AA` (on-open/on-close JS actions that can embed page text). A JavaScript `/OpenAction` is
+ * deleted too; a plain GoTo open destination is kept.
  */
 export function stripDocJavaScript(doc: any): void {
   const root = doc.getTrailer().get("Root");
@@ -137,6 +138,10 @@ export function stripDocJavaScript(doc: any): void {
   root.delete("AA");
   if (isPiiAction(root.get("OpenAction"))) {
     root.delete("OpenAction");
+  }
+  const pageCount: number = doc.countPages();
+  for (let i = 0; i < pageCount; i += 1) {
+    doc.loadPage(i).getObject().delete("AA"); // page additional-actions are a JS-only channel
   }
 }
 
@@ -162,6 +167,7 @@ export function stripFormFieldExtras(doc: any): void {
     node.delete("DV"); // reset-form default (verbatim value duplicate)
     node.delete("RV"); // rich-text duplicate of /V
     node.delete("I"); // choice-field selected INDICES — positional signal of the chosen option
+    node.delete("AA"); // field additional-actions (keystroke/format/validate/calculate JS)
     const kids = node.get("Kids");
     if (isReal(kids) && kids.isArray?.()) {
       for (let i = 0; i < kids.length; i += 1) {
