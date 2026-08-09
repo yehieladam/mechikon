@@ -125,10 +125,21 @@ const STRUCTURED_TYPES: ReadonlySet<EntityType> = new Set<EntityType>([
   "IL_NUMBER",
 ]);
 
+/** Below this many digits, a numeric needle is too short to trust a raw-byte SUBSTRING match: a 1-4
+ * digit run substring-matches inside PDF xref/offset tables and object numbers constantly. Such a
+ * value is only warned when LAYER A (digit-bounded, verified) flagged it, never on a layer-B-only hit. */
+const MIN_LAYERB_NUMERIC_DIGITS = 5;
+
 /** A layer-B-only (raw-byte substring) hit is high-confidence iff it is a full-value survival: a
- * structured value (or any digits-only surface), or a full multi-token name surface. */
+ * structured value, or a full multi-token name surface. An ultra-short (<5-digit) numeric is excluded
+ * — a raw-byte substring of so few digits is dominated by hex/offset-table noise (layer A still
+ * warns it, since layer A matching is digit-bounded). */
 function isHighConfidenceByteHit(row: Pick<KeyRow, "original" | "type">): boolean {
-  const isStructured = STRUCTURED_TYPES.has(row.type) || /^\d+$/.test(normalizeForLeak(row.original));
+  const digits = normalizeForLeak(row.original);
+  if (/^\d+$/.test(digits)) {
+    return digits.length >= MIN_LAYERB_NUMERIC_DIGITS; // digits-only surface: trust only if long enough
+  }
+  const isStructured = STRUCTURED_TYPES.has(row.type);
   const isFullMultiToken = stripControls(row.original).trim().split(/\s+/).filter(Boolean).length >= 2;
   return isStructured || isFullMultiToken;
 }

@@ -149,4 +149,25 @@ describe("highConfidenceSurvivors — B2 soft-warn filter (provenance-aware: lay
     ];
     expect(highConfidenceSurvivors(rows, [], ["052-1234567"])).toEqual(["052-1234567"]);
   });
+
+  it("drops an ultra-short (<5-digit) numeric seen ONLY in layer B (hex/offset-table false match)", async () => {
+    const { highConfidenceSurvivors } = await import("./pdfVerify");
+    const rows = [{ original: "4711", type: "IL_CASE" as const }];
+    // A 4-digit run substring-matches inside PDF offset/xref tables constantly — a layer-B-ONLY hit is
+    // noise, so it is not warned.
+    expect(highConfidenceSurvivors(rows, [], ["4711"])).toEqual([]);
+  });
+
+  it("STILL warns an ultra-short numeric when LAYER A verified it (digit-bounded, real survivor)", async () => {
+    const { highConfidenceSurvivors } = await import("./pdfVerify");
+    const rows = [{ original: "4711", type: "IL_CASE" as const }];
+    // Layer A is digit-bounded (bounded by non-digits) — a real survivor in the extractable text, warn.
+    expect(highConfidenceSurvivors(rows, ["4711"], [])).toEqual(["4711"]);
+  });
+
+  it("keeps a 5+-digit numeric layer-B-only hit (long enough to be a meaningful match)", async () => {
+    const { highConfidenceSurvivors } = await import("./pdfVerify");
+    const rows = [{ original: "12345", type: "IL_CASE" as const }];
+    expect(highConfidenceSurvivors(rows, [], ["12345"])).toEqual(["12345"]);
+  });
 });
