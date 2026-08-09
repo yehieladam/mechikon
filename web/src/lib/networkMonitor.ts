@@ -49,10 +49,26 @@ function notify(): void {
   }
 }
 
-function record(rawUrl: unknown): void {
+/** Best-effort request method for classification: explicit > Request-object method > GET default. */
+function methodString(value: unknown, explicit?: string): string {
+  if (typeof explicit === "string" && explicit !== "") {
+    return explicit;
+  }
+  if (
+    value &&
+    typeof value === "object" &&
+    "method" in value &&
+    typeof (value as { method: unknown }).method === "string"
+  ) {
+    return (value as { method: string }).method;
+  }
+  return "GET";
+}
+
+function record(rawUrl: unknown, explicitMethod?: string): void {
   const url = urlString(rawUrl);
   const origin = typeof window !== "undefined" ? window.location.origin : "";
-  const ok = isAllowedRequest(url, origin);
+  const ok = isAllowedRequest(url, origin, methodString(rawUrl, explicitMethod));
   let host: string | null = null;
   if (!ok) {
     try {
@@ -126,7 +142,8 @@ export function installNetworkMonitor(): void {
   if (typeof window.fetch === "function") {
     const originalFetch = window.fetch.bind(window);
     window.fetch = (...args: Parameters<typeof fetch>): Promise<Response> => {
-      record(args[0]);
+      // init.method wins over a Request object's method, mirroring fetch() semantics.
+      record(args[0], args[1]?.method);
       return originalFetch(...args);
     };
   }
@@ -148,7 +165,7 @@ export function installNetworkMonitor(): void {
       username?: string | null,
       password?: string | null,
     ): void {
-      record(url);
+      record(url, method);
       return originalOpen.call(this, method, url, isAsync, username, password);
     };
   }
@@ -156,7 +173,7 @@ export function installNetworkMonitor(): void {
   if (typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function") {
     const originalBeacon = navigator.sendBeacon.bind(navigator);
     navigator.sendBeacon = (...args: Parameters<typeof navigator.sendBeacon>): boolean => {
-      record(args[0]);
+      record(args[0], "POST"); // sendBeacon is POST by spec — a beacon to a model host must alarm
       return originalBeacon(...args);
     };
   }
