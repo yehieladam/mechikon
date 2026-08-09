@@ -74,8 +74,39 @@ export interface FileRedaction {
 /** Thrown when an xlsx has PII in a FORMULA cell — refused rather than under-redacted (surfaced in UI). */
 export const XLSX_FORMULA_PII = "XLSX_FORMULA_PII";
 
+/** Thrown when a zip's CUMULATIVE decompressed size exceeds the ceiling — a zip-bomb refusal (B8). */
+export const ZIP_BOMB = "ZIP_BOMB";
+
+/**
+ * Cumulative decompressed-size ceiling for ONE uploaded zip (docx/xlsx, including its embedded OOXML
+ * zips). The upload itself is capped at 50MB before it reaches the worker, but DEFLATE can inflate a
+ * few-hundred-KB bomb into gigabytes; this bounds what we ever hold in memory. String reads are charged
+ * by UTF-16 length (a lower bound on inflated bytes — this is a DoS ceiling, not an exact meter).
+ */
+export const MAX_ZIP_INFLATED_BYTES = 200 * 1024 * 1024;
+
+/** A per-upload budget: charge every inflated entry against the ceiling; throw ZIP_BOMB when over. */
+export type InflationBudget = (chunkBytes: number) => void;
+
+export function createInflationBudget(limitBytes: number = MAX_ZIP_INFLATED_BYTES): InflationBudget {
+  let usedBytes = 0;
+  return (chunkBytes: number) => {
+    usedBytes += chunkBytes;
+    if (usedBytes > limitBytes) {
+      throw new Error(ZIP_BOMB);
+    }
+  };
+}
+
 /** Thrown when an original PII value still appears in ANY text part of the output — refuse, never ship. */
 export const OFFICE_SELFVERIFY_FAILED = "OFFICE_SELFVERIFY_FAILED";
+
+/**
+ * Thrown for a legacy binary `.xls` upload (B7). The only reader of that format was SheetJS (`xlsx`),
+ * removed for unpatched Prototype-Pollution + ReDoS advisories. Modern `.xlsx` uses the JSZip overlay
+ * path (redactXlsx) and needs no such parser; a `.xls` is refused with a "re-save as .xlsx" hint.
+ */
+export const LEGACY_XLS_UNSUPPORTED = "LEGACY_XLS_UNSUPPORTED";
 
 /**
  * Embedded objects (B4) are copied through verbatim — the overlay never opens them and the office
@@ -298,20 +329,28 @@ async function redactOffice(
   groupTagFor: (name: string) => string,
   numericFor: (name: string) => boolean,
   anonymize: Anonymize,
+  maxInflatedBytes?: number,
 ): Promise<RedactedFile> {
   const zip = await loadZip(buffer);
+  // One budget for EVERYTHING this upload inflates (text parts, self-verify sweep, embeds) — the
+  // zip-bomb bound (B8). Refuses with ZIP_BOMB instead of exhausting the tab's memory.
+  const budget = createInflationBudget(maxInflatedBytes);
 
   const paths = Object.keys(zip.files)
     .filter((name) => !zip.files[name].dir && matchPart(name))
     .sort((a, b) => order(a) - order(b));
   const parts = await Promise.all(
-    paths.map(async (path) => ({
-      path,
-      content: await zip.files[path].async("string"),
-      tags: tagsFor(path),
-      groupTag: groupTagFor(path),
-      numeric: numericFor(path),
-    })),
+    paths.map(async (path) => {
+      const content = await zip.files[path].async("string");
+      budget(content.length);
+      return {
+        path,
+        content,
+        tags: tagsFor(path),
+        groupTag: groupTagFor(path),
+        numeric: numericFor(path),
+      };
+    }),
   );
   const { updated, result } = await redactParts(parts, anonymize);
   for (const [path, content] of updated) {
@@ -328,7 +367,9 @@ async function redactOffice(
   const scanMap = new Map<string, string>();
   for (const name of Object.keys(zip.files)) {
     if (!zip.files[name].dir && /\.(xml|rels)$/i.test(name)) {
-      scanMap.set(name, await zip.files[name].async("string"));
+      const content = await zip.files[name].async("string");
+      budget(content.length);
+      scanMap.set(name, content);
     }
   }
   const scan = officeLeakScan(
@@ -346,6 +387,7 @@ async function redactOffice(
     zip,
     result.key.map((row) => row.original),
     anonymize,
+    budget,
   );
 
   const bytes = await zip.generateAsync({ type: "uint8array" });
@@ -372,6 +414,7 @@ async function assertEmbedsClean(
   zip: Awaited<ReturnType<typeof loadZip>>,
   needles: readonly string[],
   anonymize: Anonymize,
+  budget: InflationBudget,
 ): Promise<void> {
   for (const name of Object.keys(zip.files)) {
     const file = zip.files[name];
@@ -383,13 +426,16 @@ async function assertEmbedsClean(
       continue;
     }
     const buffer = await file.async("arraybuffer");
+    budget(buffer.byteLength);
     if (isOoxml) {
       const inner = await tryLoadZip(buffer);
       if (inner) {
         const texts: string[] = [];
         for (const innerName of Object.keys(inner.files)) {
           if (!inner.files[innerName].dir && /\.(xml|rels)$/i.test(innerName)) {
-            texts.push(decodeXml(await inner.files[innerName].async("string")));
+            const innerContent = await inner.files[innerName].async("string");
+            budget(innerContent.length);
+            texts.push(decodeXml(innerContent));
           }
         }
         const detected = await anonymize(texts.join("\n"));
@@ -434,7 +480,11 @@ const DOCX_CHART = /^word\/charts\/chart\d*\.xml$/;
 
 /** Redact a .docx by overlaying placeholders onto its text runs (incl. tracked changes + fields) and its
  * embedded-chart data caches (`word/charts/* <c:v>`, the xlsx side already covers `xl/charts/`). */
-export function redactDocx(buffer: ArrayBuffer, anonymize: Anonymize = anonymizeDeterministic): Promise<RedactedFile> {
+export function redactDocx(
+  buffer: ArrayBuffer,
+  anonymize: Anonymize = anonymizeDeterministic,
+  maxInflatedBytes?: number,
+): Promise<RedactedFile> {
   return redactOffice(
     buffer,
     (name) => DOCX_PART.test(name) || DOCX_CHART.test(name),
@@ -443,6 +493,7 @@ export function redactDocx(buffer: ArrayBuffer, anonymize: Anonymize = anonymize
     (name) => (DOCX_CHART.test(name) ? "c:pt" : "w:p"),
     () => false,
     anonymize,
+    maxInflatedBytes,
   );
 }
 
@@ -516,7 +567,11 @@ function xlsxClass(name: string): XlsxPartClass | undefined {
   return XLSX_PART_CLASSES.find((cls) => cls.match(name));
 }
 
-export function redactXlsx(buffer: ArrayBuffer, anonymize: Anonymize = anonymizeDeterministic): Promise<RedactedFile> {
+export function redactXlsx(
+  buffer: ArrayBuffer,
+  anonymize: Anonymize = anonymizeDeterministic,
+  maxInflatedBytes?: number,
+): Promise<RedactedFile> {
   return redactOffice(
     buffer,
     (name) => xlsxClass(name) !== undefined,
@@ -525,6 +580,7 @@ export function redactXlsx(buffer: ArrayBuffer, anonymize: Anonymize = anonymize
     (name) => xlsxClass(name)?.groupTag ?? "c",
     (name) => xlsxClass(name)?.numeric ?? false,
     anonymize,
+    maxInflatedBytes,
   );
 }
 
@@ -577,8 +633,13 @@ export async function redactFile(
       const { redactPdf } = await import("./pdfRedact");
       return redactPdf(buffer, anonymize);
     }
+    case "xls":
+      // Legacy binary .xls (B7): its only reader was SheetJS, removed for unpatched
+      // Prototype-Pollution + ReDoS. Refuse with a clear code the App turns into a "re-save as .xlsx"
+      // hint — never route untrusted bytes into a vulnerable parser.
+      throw new Error(LEGACY_XLS_UNSUPPORTED);
     default:
-      // xls (legacy binary, not a zip): detect + preview only, no redacted download.
+      // Any other type we can still read as text (detect + preview only, no redacted download).
       return { result: await anonymize(await extractText(fileName, buffer)) };
   }
 }

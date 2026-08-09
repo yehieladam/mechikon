@@ -23,6 +23,7 @@ import { markScanKeySources, scanTextLeaks } from "@engine/scanKey";
 import type { OcrPageResult } from "@engine/ocrTypes";
 import type { AnonymizeResult, Span } from "@engine/types";
 import { sanitizeMetadata, collectOutlineItems } from "./pdfSanitize";
+import { assertPageCountWithinCap } from "./pdfLimits";
 import { ocrImage } from "./ocr";
 import type { RedactedFile, Anonymize } from "./officeRedact";
 
@@ -122,6 +123,8 @@ async function redactScanDoc(
   const redactedPages: number[] = []; // pages that actually got >=1 rect — the only ones worth re-verifying
   const unverifiedImagePages: number[] = []; // 1-based pages that failed the quality gate (produce + warn)
   const pageCount: number = doc.countPages();
+  // Page cap (B8): OCR costs seconds per page — refuse an absurd count BEFORE the rasterize/OCR loop.
+  assertPageCountWithinCap(pageCount);
   for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
     const page = doc.loadPage(pageIndex);
     const bounds = page.getBounds(); // [x0, y0, x1, y1] in points (presented orientation)

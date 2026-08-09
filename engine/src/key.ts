@@ -6,9 +6,30 @@
  * belongs to a different document.
  */
 import type { EntityType, KeyRow } from "./types";
+import { PRIORITY } from "./types";
 
 const CSV_HEADER = "placeholder,original,type";
 const KEY_VERSION = "key.v1";
+/**
+ * Untrusted-input bounds for an UPLOADED key file: a real key has at most a few thousand rows (one per
+ * distinct PII value in one document) with short values, while a hostile file can carry millions of
+ * rows / megabyte strings that later feed UI regex construction (App highlightValues). Reject over the
+ * cap rather than truncate — a silently truncated key would restore incompletely.
+ */
+const MAX_KEY_ROWS = 50_000;
+const MAX_KEY_FIELD_CHARS = 10_000;
+
+/** Every known entity type — PRIORITY is the single source of truth (typed Record<EntityType, …>). */
+const VALID_TYPES: ReadonlySet<string> = new Set(Object.keys(PRIORITY));
+
+/**
+ * Whitelist an UPLOADED row's type. The type never affects restore (that is placeholder -> original),
+ * so an unknown/hostile value ("__proto__", an object, a megabyte string) is normalized to MANUAL —
+ * the row stays restorable and the bogus string never propagates into the app.
+ */
+function normalizeType(value: unknown): EntityType {
+  return typeof value === "string" && VALID_TYPES.has(value) ? (value as EntityType) : "MANUAL";
+}
 
 export interface KeyFile {
   readonly version: typeof KEY_VERSION;
@@ -98,7 +119,7 @@ export function fromCsv(csv: string): KeyRow[] {
     .map((r) => ({
       placeholder: csvUnguard(r[0]),
       original: csvUnguard(r[1]),
-      type: csvUnguard(r[2]) as EntityType,
+      type: normalizeType(csvUnguard(r[2])),
     }));
 }
 
@@ -127,9 +148,16 @@ export function fromKeyFile(json: string): KeyRow[] {
   ) {
     throw new Error("Unrecognized key file (expected version key.v1).");
   }
-  return (parsed as { rows: KeyRow[] }).rows.map((r) => ({
-    placeholder: String(r.placeholder),
-    original: String(r.original),
-    type: r.type,
-  }));
+  const rawRows = (parsed as { rows: KeyRow[] }).rows;
+  if (rawRows.length > MAX_KEY_ROWS) {
+    throw new Error(`Key file exceeds the row cap (${MAX_KEY_ROWS}).`);
+  }
+  return rawRows.map((r) => {
+    const placeholder = String(r.placeholder);
+    const original = String(r.original);
+    if (placeholder.length > MAX_KEY_FIELD_CHARS || original.length > MAX_KEY_FIELD_CHARS) {
+      throw new Error("Key file row exceeds the per-field length cap.");
+    }
+    return { placeholder, original, type: normalizeType(r.type) };
+  });
 }

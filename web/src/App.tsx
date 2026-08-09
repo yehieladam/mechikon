@@ -15,6 +15,7 @@ import {
 import { getEngine } from "./worker/engineClient";
 import { useNetwork } from "./lib/useNetworkCount";
 import { mimeFor } from "./lib/mime";
+import { exceedsKeyFileLimit, exceedsUploadLimit } from "./lib/uploadLimits";
 import { isScanOcrEnabled } from "./lib/scanFlag";
 import { scanNoticeFor } from "./lib/scanNotice";
 import { loadNer, useNer } from "./worker/nerController";
@@ -249,7 +250,12 @@ export function App() {
   const [copyError, setCopyError] = useState(false);
   const [restoredCopyError, setRestoredCopyError] = useState(false);
   const [fileError, setFileError] = useState(false);
+  // Untrusted-input bounds (B8): "size" = the upload is over the byte cap OR a zip that inflates past
+  // the decompressed ceiling (a zip bomb); "pages" = a PDF over the page cap. Clear refusals, no crash.
+  const [limitNotice, setLimitNotice] = useState<null | "size" | "pages">(null);
   const [scannedNotice, setScannedNotice] = useState(false);
+  // Legacy binary .xls (B7): SheetJS removed, so a .xls is refused with a "re-save as .xlsx" hint.
+  const [legacyXlsNotice, setLegacyXlsNotice] = useState(false);
   const [formulaNotice, setFormulaNotice] = useState(false);
   const [selfVerifyNotice, setSelfVerifyNotice] = useState(false);
   // Mixed digital+scanned PDF (B3): image-only pages we could not verify clean. The file is still
@@ -320,9 +326,9 @@ export function App() {
   const [passphraseMissing, setPassphraseMissing] = useState(false);
   const passphraseRef = useRef<HTMLInputElement>(null);
   // Restore a FILE (docx/txt with placeholders) back to its original values.
-  const [restoreFileError, setRestoreFileError] = useState<"unsupported" | "nokey" | "generic" | null>(
-    null,
-  );
+  const [restoreFileError, setRestoreFileError] = useState<
+    "unsupported" | "nokey" | "toobig" | "generic" | null
+  >(null);
   const [restoreUnmatched, setRestoreUnmatched] = useState(0);
   // M4: transient count of names the NER upgrade pass just added, so the silent upgrade is acknowledged.
   const [nerAdded, setNerAdded] = useState<number | null>(null);
@@ -339,6 +345,7 @@ export function App() {
     setRestoreResult(null);
     setRedacted(null);
     setScannedNotice(false);
+    setLimitNotice(null); // a fresh result clears any leftover size/page refusal from a prior file
     setScanNotice(null); // a fresh result clears any leftover scan refusal from a prior file
     setUnverifiedImagePages([]); // and any prior mixed-PDF per-page warning
     setPdfUnverifiedTerms([]); // and any prior PDF self-verify warning (B2) — a new result re-verifies
@@ -441,12 +448,21 @@ export function App() {
       setStatus("reading");
       setFileError(false);
       setScannedNotice(false);
+      setLegacyXlsNotice(false);
+      setLimitNotice(null);
       setFormulaNotice(false);
       setSelfVerifyNotice(false);
       setScanNotice(null);
       setManualTerms([]);
       excludedRef.current = []; // clear the ref synchronously — the redactFile calls below read it this tick
       setExcludedTerms([]);
+      // Size gate (B8) BEFORE arrayBuffer: refuse an oversized upload without ever reading it into
+      // memory. Covers the upload button AND drag-drop (the drop handler delegates here).
+      if (exceedsUploadLimit(file.size)) {
+        setLimitNotice("size");
+        setStatus(null);
+        return;
+      }
       try {
         const buffer = await file.arrayBuffer();
         // Scan route (flag-gated): classify BEFORE committing the source, so a scan is marked
@@ -497,6 +513,18 @@ export function App() {
         if (error instanceof Error && error.message.includes("NO_TEXT_LAYER")) {
           setSource(null);
           setScannedNotice(true);
+        } else if (error instanceof Error && error.message.includes("ZIP_BOMB")) {
+          // The zip inflates past the decompressed ceiling (B8) — refuse instead of exhausting memory.
+          setSource(null);
+          setLimitNotice("size");
+        } else if (error instanceof Error && error.message.includes("PDF_TOO_MANY_PAGES")) {
+          // Absurd page count (B8) — refuse before the per-page loops pin the worker.
+          setSource(null);
+          setLimitNotice("pages");
+        } else if (error instanceof Error && error.message.includes("LEGACY_XLS_UNSUPPORTED")) {
+          // Legacy binary .xls (B7) — SheetJS removed; tell the user to re-save as .xlsx.
+          setSource(null);
+          setLegacyXlsNotice(true);
         } else if (error instanceof Error && error.message.includes("XLSX_FORMULA_PII")) {
           // A number produced by a formula can't be safely overlaid (recalc regenerates it) — refuse.
           setSource(null);
@@ -780,6 +808,12 @@ export function App() {
     }
     setKeyError(null);
     setPendingEnc(null);
+    // Size gate BEFORE reading: a real key file is at most a few hundred KB; refusing an oversized one
+    // here means a hostile multi-GB upload is never read into memory at all.
+    if (exceedsKeyFileLimit(file.size)) {
+      setKeyError("invalid");
+      return;
+    }
     try {
       const text = await file.text();
       const parsed: unknown = JSON.parse(text);
@@ -892,6 +926,11 @@ export function App() {
         setRestoreFileError("nokey");
         return;
       }
+      // Size gate (B8) BEFORE arrayBuffer — same ceiling as the redaction upload.
+      if (exceedsUploadLimit(file.size)) {
+        setRestoreFileError("toobig");
+        return;
+      }
       try {
         const buffer = await file.arrayBuffer();
         const { bytes, unmatched } = await getEngine().restoreFile(file.name, buffer, activeKey);
@@ -907,7 +946,9 @@ export function App() {
         setRestoreFileError(
           error instanceof Error && error.message.includes("RESTORE_UNSUPPORTED")
             ? "unsupported"
-            : "generic",
+            : error instanceof Error && error.message.includes("ZIP_BOMB")
+              ? "toobig" // the docx inflates past the decompressed ceiling (B8)
+              : "generic",
         );
       }
     },
@@ -1096,7 +1137,7 @@ export function App() {
                 {t("input.upload")}
                 <input
                   type="file"
-                  accept=".docx,.xlsx,.xls,.csv,.pdf,.txt"
+                  accept=".docx,.xlsx,.csv,.pdf,.txt"
                   className="hidden"
                   disabled={busy}
                   onChange={(event) => {
@@ -1144,6 +1185,22 @@ export function App() {
               role="alert"
             >
               {t("input.scannedPdf")}
+            </div>
+          )}
+          {limitNotice && (
+            <div
+              className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-[13px] leading-relaxed text-amber-800"
+              role="alert"
+            >
+              {limitNotice === "pages" ? t("input.pdfTooManyPages") : t("input.fileTooLarge")}
+            </div>
+          )}
+          {legacyXlsNotice && (
+            <div
+              className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-[13px] leading-relaxed text-amber-800"
+              role="alert"
+            >
+              {t("input.legacyXls")}
             </div>
           )}
           {formulaNotice && (
@@ -1949,7 +2006,9 @@ export function App() {
                         ? t("restoreFile.noKey")
                         : restoreFileError === "unsupported"
                           ? t("restoreFile.unsupported")
-                          : t("restoreFile.generic")}
+                          : restoreFileError === "toobig"
+                            ? t("restoreFile.tooLarge")
+                            : t("restoreFile.generic")}
                     </p>
                   )}
                   {restoreUnmatched > 0 && (

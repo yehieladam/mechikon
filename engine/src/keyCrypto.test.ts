@@ -62,6 +62,28 @@ describe("keyCrypto", () => {
   });
 });
 
+describe("keyCrypto — passphrase Unicode normalization (NFC)", () => {
+  it("decrypts with the NFC form of a passphrase that was encrypted in NFD form (cross-device)", async () => {
+    // macOS-style input can produce the DECOMPOSED form (NFD) of the same visible passphrase another
+    // device types PRECOMPOSED (NFC). Both must derive the SAME key, or the correct passphrase fails
+    // permanently on the other device (data loss).
+    const nfd = "café שָׁלוֹם".normalize("NFD");
+    const nfc = nfd.normalize("NFC");
+    expect(nfd).not.toBe(nfc); // the two forms genuinely differ code-point-wise
+    const envelope = await encryptKeyRows(ROWS, nfd);
+    const restored = await decryptKeyRows(envelope, nfc);
+    expect(restored).toEqual(ROWS);
+  });
+
+  it("decrypts with the NFD form of a passphrase that was encrypted in NFC form", async () => {
+    const nfc = "café".normalize("NFC");
+    const nfd = nfc.normalize("NFD");
+    const envelope = await encryptKeyRows(ROWS, nfc);
+    const restored = await decryptKeyRows(envelope, nfd);
+    expect(restored).toEqual(ROWS);
+  });
+});
+
 describe("keyCrypto — untrusted-envelope hardening (M2)", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -111,6 +133,19 @@ describe("keyCrypto — untrusted-envelope hardening (M2)", () => {
     expect(isEncryptedKeyFile({ ...base, kdf: { ...base.kdf, iterations: "600000" } })).toBe(false);
     expect(isEncryptedKeyFile({ ...base, nonce: "" })).toBe(false);
     expect(isEncryptedKeyFile({ version: "key.v1" })).toBe(false);
+  });
+
+  it("rejects an envelope whose salt / nonce / ciphertext strings exceed the size caps", async () => {
+    const base = await validEnvelope();
+    // Our own envelopes are tiny (16-byte salt, 12-byte nonce); a hostile file can carry megabytes in
+    // any string field. base64(16 bytes)=24 chars, so 64 / 32 are generous caps; ciphertext is bounded
+    // to the base64 of a ~10MB key (far above any real key, far below an allocation-bomb).
+    expect(isEncryptedKeyFile({ ...base, kdf: { ...base.kdf, salt: "A".repeat(65) } })).toBe(false);
+    expect(isEncryptedKeyFile({ ...base, nonce: "A".repeat(33) })).toBe(false);
+    expect(isEncryptedKeyFile({ ...base, ciphertext: "A".repeat(14_000_001) })).toBe(false);
+    await expect(
+      decryptKeyRows(asEnvelope({ ...base, kdf: { ...base.kdf, salt: "A".repeat(65) } }), "pw"),
+    ).rejects.toThrow(INVALID_KEY_FILE);
   });
 
   it("accepts the iteration boundaries and rejects just outside them", async () => {

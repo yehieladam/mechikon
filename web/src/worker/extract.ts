@@ -1,7 +1,11 @@
 /**
- * Extract plain text from an uploaded file, inside the worker. The heavy parsers (mammoth, SheetJS,
- * mupdf) are DYNAMICALLY imported so they load only when a file is actually processed (P0I-02) and
- * never weigh down the paste path. The extracted text is then anonymized like any pasted text.
+ * Extract plain text from an uploaded file, inside the worker. The heavy parsers (mammoth, mupdf) are
+ * DYNAMICALLY imported so they load only when a file is actually processed (P0I-02) and never weigh down
+ * the paste path. The extracted text is then anonymized like any pasted text.
+ *
+ * Legacy binary .xls is NOT handled here: its only reader was SheetJS (`xlsx`), removed for unpatched
+ * Prototype-Pollution + ReDoS advisories (B7). Modern .xlsx uses the JSZip overlay path (officeRedact);
+ * a .xls upload is refused upstream in redactFile with a "re-save as .xlsx" hint.
  *
  * NOTE: PDF text order for Hebrew can be reversed (MuPDF returns visual order) — full bidi handling
  * is PDF-03; this first pass extracts and anonymizes, which already redacts the structured PII.
@@ -24,16 +28,6 @@ async function fromDocx(buffer: ArrayBuffer): Promise<string> {
   return value;
 }
 
-async function fromSpreadsheet(buffer: ArrayBuffer): Promise<string> {
-  const xlsx: any = await import("xlsx");
-  const read = pick<(data: Uint8Array, opts: { type: string }) => any>(xlsx, "read");
-  const utils = pick<any>(xlsx, "utils");
-  const wb = read(new Uint8Array(buffer), { type: "array" });
-  return (wb.SheetNames as string[])
-    .map((name) => utils.sheet_to_txt(wb.Sheets[name]) as string)
-    .join("\n");
-}
-
 async function fromPdf(buffer: ArrayBuffer): Promise<string> {
   const mupdf: any = await import("mupdf");
   const doc = mupdf.Document.openDocument(new Uint8Array(buffer), "application/pdf");
@@ -53,14 +47,11 @@ export async function extractText(fileName: string, buffer: ArrayBuffer): Promis
   switch (ext) {
     case "docx":
       return fromDocx(buffer);
-    case "xlsx":
-    case "xls":
-    case "csv":
-      return fromSpreadsheet(buffer);
     case "pdf":
       return fromPdf(buffer);
+    case "csv":
     case "txt":
-      return new TextDecoder().decode(buffer);
+      return new TextDecoder().decode(buffer); // plain text — no parser needed
     default:
       throw new Error(`Unsupported file type: .${ext}`);
   }

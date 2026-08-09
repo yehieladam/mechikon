@@ -23,6 +23,15 @@ const NONCE_BYTES = 12;
  */
 const MIN_ITERATIONS = 100_000;
 const MAX_ITERATIONS = 10_000_000;
+/**
+ * String-length caps on the envelope's base64 fields (same untrusted-input reasoning as the iteration
+ * bound): our own files carry a 24-char salt (16 bytes), 16-char nonce (12 bytes) and a ciphertext far
+ * under the cap, while a hostile file can pack megabytes into any field to burn memory in atob/decode.
+ * 64 / 32 are generous multiples of the real sizes; the ciphertext cap is the base64 of a ~10MB key.
+ */
+const MAX_SALT_B64_CHARS = 64;
+const MAX_NONCE_B64_CHARS = 32;
+const MAX_CIPHERTEXT_B64_CHARS = 14_000_000;
 
 /** Thrown when an uploaded key envelope is malformed or out of bounds (distinct from a wrong passphrase). */
 export const INVALID_KEY_FILE = "INVALID_KEY_FILE";
@@ -36,8 +45,8 @@ function isValidIterations(value: unknown): value is number {
   );
 }
 
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0;
+function isBoundedString(value: unknown, maxChars: number): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= maxChars;
 }
 
 export interface EncryptedKeyFile {
@@ -73,9 +82,12 @@ async function deriveAesKey(
   salt: Uint8Array,
   iterations: number,
 ): Promise<CryptoKey> {
+  // NFC-normalize BEFORE encoding: the same visible passphrase can arrive precomposed (NFC) on one
+  // device and decomposed (NFD, e.g. macOS input) on another. Without this, the correct passphrase
+  // derives a DIFFERENT key on the other device — a permanent decrypt failure (data loss).
   const baseKey = await crypto.subtle.importKey(
     "raw",
-    new TextEncoder().encode(passphrase),
+    new TextEncoder().encode(passphrase.normalize("NFC")),
     "PBKDF2",
     false,
     ["deriveKey"],
@@ -151,7 +163,11 @@ export function isEncryptedKeyFile(value: unknown): value is EncryptedKeyFile {
     return false;
   }
   const env = value as Record<string, unknown>;
-  if (env.version !== ENC_VERSION || !isNonEmptyString(env.nonce) || !isNonEmptyString(env.ciphertext)) {
+  if (
+    env.version !== ENC_VERSION ||
+    !isBoundedString(env.nonce, MAX_NONCE_B64_CHARS) ||
+    !isBoundedString(env.ciphertext, MAX_CIPHERTEXT_B64_CHARS)
+  ) {
     return false;
   }
   const kdf = env.kdf;
@@ -159,5 +175,7 @@ export function isEncryptedKeyFile(value: unknown): value is EncryptedKeyFile {
     return false;
   }
   const k = kdf as Record<string, unknown>;
-  return k.algo === "PBKDF2-SHA256" && isValidIterations(k.iterations) && isNonEmptyString(k.salt);
+  return (
+    k.algo === "PBKDF2-SHA256" && isValidIterations(k.iterations) && isBoundedString(k.salt, MAX_SALT_B64_CHARS)
+  );
 }

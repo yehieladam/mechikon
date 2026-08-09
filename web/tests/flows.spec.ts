@@ -1,6 +1,5 @@
 import { test, expect } from "./fixtures";
 import JSZip from "jszip";
-import * as XLSX from "xlsx";
 
 /**
  * Browser smoke for the non-PDF flows, under production headers.
@@ -26,14 +25,24 @@ async function buildDocx(): Promise<Buffer> {
   return zip.generateAsync({ type: "nodebuffer" });
 }
 
-/** Minimal .xlsx with a cell holding deterministic PII. */
-function buildXlsx(): Buffer {
-  const sheet = XLSX.utils.aoa_to_sheet([["לקוח", `טלפון ${PHONE}`]]);
-  const book = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(book, sheet, "Sheet1");
-  // bookSST: shared strings, like real Excel/Sheets output — the format the overlay redaction targets
-  // (inline sheet strings are a documented not-yet-handled case in officeRedact).
-  return XLSX.write(book, { type: "buffer", bookType: "xlsx", bookSST: true }) as Buffer;
+/** Minimal .xlsx (a zip with a shared-string table) carrying deterministic PII — built with JSZip so no
+ * SheetJS dependency is needed (B7: `xlsx` removed for unpatched Prototype-Pollution + ReDoS). Shared
+ * strings are the format the overlay redaction targets (redactXlsx). */
+async function buildXlsx(): Promise<Buffer> {
+  const shared = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="2" uniqueCount="2">
+  <si><t>לקוח</t></si>
+  <si><t>טלפון ${PHONE}</t></si>
+</sst>`;
+  const sheet = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>
+  <row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c></row>
+</sheetData></worksheet>`;
+  const zip = new JSZip();
+  zip.file("[Content_Types].xml", "<Types/>");
+  zip.file("xl/sharedStrings.xml", shared);
+  zip.file("xl/worksheets/sheet1.xml", sheet);
+  return zip.generateAsync({ type: "nodebuffer" });
 }
 
 /** Upload a file to the MAIN upload input, wait for NER to settle, and capture the redacted download. */
@@ -242,7 +251,7 @@ test("@model docx + xlsx: redact in place and download a file without the origin
   const xlsxBytes = await uploadAndDownload(page, {
     name: "book.xlsx",
     mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    buffer: buildXlsx(),
+    buffer: await buildXlsx(),
   });
   const sharedStrings = await (await JSZip.loadAsync(xlsxBytes))
     .file("xl/sharedStrings.xml")!
