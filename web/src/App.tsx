@@ -1686,7 +1686,7 @@ export function App() {
                       </svg>
                     </div>
                     <div className="min-w-0">
-                      <div className="text-[13px] font-medium text-ink">{t("key.title")}</div>
+                      <div className="text-[13px] font-medium text-ink">{t("key.createTitle")}</div>
                       {keyEverDownloaded ? (
                         <p className="mt-1 text-xs font-medium leading-relaxed text-amber-800">
                           {t("key.changed")}
