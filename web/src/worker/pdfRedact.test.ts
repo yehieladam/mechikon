@@ -333,6 +333,78 @@ describe("redactPdf — AcroForm field values (/V) are redacted and verified", (
   });
 });
 
+describe("redactPdf — strips /A /URI link actions and document JavaScript (invisible PII channels)", () => {
+  const EMAIL = "dan.cohen@example.com";
+  const JS_ID = "123456709";
+
+  /** A one-page PDF with a mailto: link action carrying an email, and doc-level /Names /JavaScript
+   * whose script embeds PII. Neither is part of the page text, so redaction never sees them. */
+  async function linkJsPdf(): Promise<ArrayBuffer> {
+    // reason: mupdf's WASM surface is untyped; narrowly used to author a crafted test PDF.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mupdf = (await import("mupdf")) as any;
+    const doc = new mupdf.PDFDocument();
+    const font = doc.addSimpleFont(new mupdf.Font("Helvetica"));
+    const fonts = doc.newDictionary();
+    fonts.put("F1", font);
+    const resources = doc.newDictionary();
+    resources.put("Font", fonts);
+    doc.insertPage(-1, doc.addPage([0, 0, 612, 792], 0, resources, "BT /F1 12 Tf 50 700 Td (contact us) Tj ET"));
+    const pageObj = doc.loadPage(0).getObject();
+
+    const link = doc.addObject(doc.newDictionary());
+    link.put("Type", doc.newName("Annot"));
+    link.put("Subtype", doc.newName("Link"));
+    const rect = doc.newArray();
+    for (const n of [50, 690, 150, 710]) {
+      rect.push(n);
+    }
+    link.put("Rect", rect);
+    const action = doc.newDictionary();
+    action.put("S", doc.newName("URI"));
+    action.put("URI", doc.newString(`mailto:${EMAIL}`));
+    link.put("A", action);
+    const annots = doc.newArray();
+    annots.push(link);
+    pageObj.put("Annots", annots);
+
+    const jsAction = doc.newDictionary();
+    jsAction.put("S", doc.newName("JavaScript"));
+    jsAction.put("JS", doc.newString(`app.alert("id ${JS_ID}");`));
+    const namesArray = doc.newArray();
+    namesArray.push(doc.newString("init"));
+    namesArray.push(doc.addObject(jsAction));
+    const jsTree = doc.newDictionary();
+    jsTree.put("Names", namesArray);
+    const names = doc.newDictionary();
+    names.put("JavaScript", jsTree);
+    doc.getTrailer().get("Root").put("Names", names);
+    return new Uint8Array(doc.saveToBuffer({}).asUint8Array()).buffer as ArrayBuffer;
+  }
+
+  it("the mailto: email and the script PII are gone from the redacted bytes", async () => {
+    const buf = await linkJsPdf();
+    const { bytes } = await redactPdf(buf, anonymizeDeterministic);
+    // reason: mupdf's WASM surface is untyped.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mupdf = (await import("mupdf")) as any;
+    const doc = mupdf.PDFDocument.openDocument(bytes, "application/pdf");
+    // The URI action is stripped from the link annotation.
+    const annots = doc.getTrailer().get("Root").get("Pages").get("Kids").get(0).get("Annots");
+    if (annots && !(annots.isNull?.() ?? false) && annots.length > 0) {
+      const a = annots.get(0).get("A");
+      expect(a === null || (a.isNull?.() ?? false)).toBe(true);
+    }
+    // Document JavaScript is deleted wholesale.
+    const namesDict = doc.getTrailer().get("Root").get("Names");
+    const js = namesDict && !(namesDict.isNull?.() ?? false) ? namesDict.get("JavaScript") : null;
+    expect(js === null || (js.isNull?.() ?? false)).toBe(true);
+    // And the PII is physically gone from the bytes (the real gate).
+    const b = await layerB(bytes, [EMAIL, JS_ID]);
+    expect(b.pass).toBe(true);
+  });
+});
+
 describe("extractPdfMapped — synthetic (logical-authored) fixture documents the trap", () => {
   it("finds the ID but extracts the Hebrew name REVERSED (the PDF-03 pitfall)", async () => {
     const mapped = await extractPdfMapped(readAsArrayBuffer("web/test-fixtures/hebrew.pdf"));

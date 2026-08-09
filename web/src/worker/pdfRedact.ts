@@ -168,6 +168,14 @@ function readMetadataChannels(doc: any): string {
       if (annot.getContents) {
         parts.push(annot.getContents());
       }
+      // A surviving /A /URI action (should have been stripped) — read it DECODED so layer A sees it.
+      // Each step is guarded: mupdf's get() crashes on a PDF null object rather than chaining.
+      const obj = annot.getObject?.();
+      const action = obj && !(obj.isNull?.() ?? false) ? obj.get("A") : null;
+      const uri = action && !(action.isNull?.() ?? false) ? action.get("URI") : null;
+      if (uri && (uri.isString?.() ?? false)) {
+        parts.push(uri.asString());
+      }
     }
   }
   return parts.join("\n");

@@ -72,6 +72,75 @@ export function clearAnnotationText(doc: any): void {
 }
 
 /**
+ * Action types whose payload can carry PII outward and cannot be rewritten coherently: /URI (a
+ * mailto:/https URL embedding a name or email), /JavaScript (arbitrary script text), /SubmitForm (a
+ * submission URL), /Launch and /GoToR (external file paths). Internal /GoTo navigation carries no
+ * text and is kept.
+ */
+const PII_ACTION_TYPES: ReadonlySet<string> = new Set(["URI", "JavaScript", "SubmitForm", "Launch", "GoToR"]);
+
+/** True when an action dict must be stripped: a PII-capable /S type, or ANY /Next chain (a nested
+ * action list can hide a URI/JS behind an innocent first action — unverifiable, so fail-closed). */
+function isPiiAction(action: any): boolean {
+  if (!isReal(action)) {
+    return false;
+  }
+  const s = action.get("S");
+  const name: string = s && (s.isName?.() ?? false) ? s.asName() : "";
+  return PII_ACTION_TYPES.has(name) || isReal(action.get("Next"));
+}
+
+/**
+ * Strip annotation ACTIONS that can carry PII in their payload — a link's `/A /URI` (e.g. a mailto:
+ * with the person's address) survives redaction of the visible text, because the URI lives in the
+ * annotation dict, not the content stream. `/AA` (additional actions) is deleted outright on every
+ * annotation: it is a JS-only channel. Fail-closed: strip rather than rewrite.
+ */
+export function stripAnnotationActions(doc: any): void {
+  const pageCount: number = doc.countPages();
+  for (let i = 0; i < pageCount; i += 1) {
+    const annots = doc.loadPage(i).getObject().get("Annots");
+    if (!isReal(annots) || !(annots.isArray?.() ?? false)) {
+      continue;
+    }
+    for (let j = 0; j < annots.length; j += 1) {
+      const annot = annots.get(j);
+      if (!isReal(annot)) {
+        continue;
+      }
+      try {
+        if (isPiiAction(annot.get("A"))) {
+          annot.delete("A");
+        }
+        annot.delete("AA");
+      } catch {
+        /* best effort per annotation; the byte-level self-verify is the backstop */
+      }
+    }
+  }
+}
+
+/**
+ * Delete document-level JavaScript: the `/Names /JavaScript` name tree (scripts run on open and can
+ * embed any document data verbatim) and the catalog's `/AA` additional-actions (JS-only). A
+ * JavaScript `/OpenAction` is deleted too; a plain GoTo open destination is kept.
+ */
+export function stripDocJavaScript(doc: any): void {
+  const root = doc.getTrailer().get("Root");
+  if (!isReal(root)) {
+    return;
+  }
+  const names = root.get("Names");
+  if (isReal(names)) {
+    names.delete("JavaScript");
+  }
+  root.delete("AA");
+  if (isPiiAction(root.get("OpenAction"))) {
+    root.delete("OpenAction");
+  }
+}
+
+/**
  * Strip form-field side channels that duplicate or shadow the field VALUE, on EVERY field (fail-closed
  * — we cannot rewrite these coherently, so they must not survive at all):
  *  - /DV (reset-form default) and /RV (rich-text duplicate of /V) can carry the typed PII verbatim;
@@ -107,12 +176,15 @@ export function stripFormFieldExtras(doc: any): void {
   }
 }
 
-/** Strip all pure-metadata leak channels (Info, XMP, embedded files, annotation text, field extras). */
+/** Strip all pure-metadata leak channels (Info, XMP, embedded files, annotation text + actions,
+ * document JavaScript, field extras). */
 export function sanitizeMetadata(doc: any): void {
   stripInfo(doc);
   stripXmp(doc);
   stripEmbeddedFiles(doc);
   clearAnnotationText(doc);
+  stripAnnotationActions(doc);
+  stripDocJavaScript(doc);
   stripFormFieldExtras(doc);
 }
 
