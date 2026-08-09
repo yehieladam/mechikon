@@ -23,6 +23,7 @@ import { anonymizeDeterministic, detectDeterministic } from "@engine/pipeline";
 import { applyOverlay, toReplacements, type Segment } from "@engine/overlay";
 import { decodeXml, encodeXml } from "@engine/xml";
 import { officeLeakScan } from "@engine/officeVerify";
+import { layerB } from "@engine/pdfVerify";
 import { sanitizeOfficeMetadata } from "./officeSanitize";
 import { extractText } from "./extract";
 // Type-only (erased at runtime) — avoids an officeRedact <-> scanRedact require cycle.
@@ -71,13 +72,15 @@ export const XLSX_FORMULA_PII = "XLSX_FORMULA_PII";
 export const OFFICE_SELFVERIFY_FAILED = "OFFICE_SELFVERIFY_FAILED";
 
 /**
- * Embedded objects (B4): an OLE blob or a NESTED OOXML/zip part (`word/embeddings/…`, `oleObject*.bin`,
- * an embedded `.xlsx`/`.docx`/`.pptx`) is a self-contained payload the overlay never opens and the
- * self-verify never inflates — its original bytes are copied through verbatim. An embedded worksheet can
- * hold a full PII table, so shipping it is a silent leak. Until nested redaction exists we FAIL CLOSED:
- * refuse (reusing the OFFICE_SELFVERIFY notice) rather than hand back a file with un-scanned PII inside.
+ * Embedded objects (B4) are copied through verbatim — the overlay never opens them and the office
+ * self-verify only scans XML/rels parts, so an embed's bytes are otherwise un-scanned. Refusing on mere
+ * PRESENCE was too broad: Word stores EVERY native chart's data as an embedded `.xlsx` and legacy
+ * equations as `oleObject*.bin`, so a presence guard rejected most real business documents with a
+ * misleading "PII survived" notice. Instead we look INSIDE (see assertEmbedsClean) and refuse only on
+ * actual PII, so a clean chart/equation embed passes through byte-identical.
  */
-const EMBEDDED_PART = /(^|\/)embeddings\/|oleobject\d*\.bin$|\.(xlsx|docx|pptx|xlsm|docm|pptm)$/i;
+const OOXML_EMBED = /(^|\/)embeddings\/[^/]*\.(xlsx|docx|pptx|xlsm|docm|pptm)$/i;
+const OLE_EMBED = /(^|\/)embeddings\/[^/]*\.bin$|(^|\/)oleobject\d*\.bin$/i;
 
 /** A region of one XML part to rewrite in place. "text" = a text-node's inner; "numcell" = a whole `<c>`. */
 interface Edit {
@@ -292,13 +295,6 @@ async function redactOffice(
 ): Promise<RedactedFile> {
   const zip = await loadZip(buffer);
 
-  // B4 (fail closed): an embedded OLE/OOXML object is copied through verbatim — the overlay never opens
-  // it and the self-verify never inflates it, so a PII table hidden inside would ship silently. Refuse.
-  const embedded = Object.keys(zip.files).filter((name) => !zip.files[name].dir && EMBEDDED_PART.test(name));
-  if (embedded.length > 0) {
-    throw new Error(`${OFFICE_SELFVERIFY_FAILED}: embedded object(s) cannot be redacted — ${embedded.join(", ")}`);
-  }
-
   const paths = Object.keys(zip.files)
     .filter((name) => !zip.files[name].dir && matchPart(name))
     .sort((a, b) => order(a) - order(b));
@@ -337,8 +333,74 @@ async function redactOffice(
     throw new Error(`${OFFICE_SELFVERIFY_FAILED}: ${scan.hits.join(", ")}`);
   }
 
+  // B4: inspect embedded objects for actual PII (see assertEmbedsClean) — refuse only on a hit, so a
+  // clean chart-data workbook / legacy-equation blob passes through byte-identical instead of being
+  // refused on presence.
+  await assertEmbedsClean(
+    zip,
+    result.key.map((row) => row.original),
+    anonymize,
+  );
+
   const bytes = await zip.generateAsync({ type: "uint8array" });
   return { bytes, result };
+}
+
+async function tryLoadZip(buffer: ArrayBuffer): Promise<Awaited<ReturnType<typeof loadZip>> | undefined> {
+  try {
+    return await loadZip(buffer);
+  } catch {
+    return undefined; // not a zip (or corrupt) — caller falls back to an opaque byte-scan
+  }
+}
+
+/**
+ * Fail-closed check on embedded objects, scanning CONTENT rather than refusing on presence:
+ *  - a nested OOXML zip (`embeddings/*.xlsx|docx|pptx|…`) is opened and its text parts run through the
+ *    same injected detection; refuse only if the embed itself holds PII. A chart's data workbook with
+ *    no PII passes through untouched.
+ *  - an opaque OLE `.bin` (or an OOXML embed that would not open) is byte-scanned in UTF-8 AND UTF-16LE
+ *    (pdfVerify layer B) for the OUTER document's detected values; refuse only on a hit.
+ */
+async function assertEmbedsClean(
+  zip: Awaited<ReturnType<typeof loadZip>>,
+  needles: readonly string[],
+  anonymize: Anonymize,
+): Promise<void> {
+  for (const name of Object.keys(zip.files)) {
+    const file = zip.files[name];
+    if (file.dir) {
+      continue;
+    }
+    const isOoxml = OOXML_EMBED.test(name);
+    if (!isOoxml && !OLE_EMBED.test(name)) {
+      continue;
+    }
+    const buffer = await file.async("arraybuffer");
+    if (isOoxml) {
+      const inner = await tryLoadZip(buffer);
+      if (inner) {
+        const texts: string[] = [];
+        for (const innerName of Object.keys(inner.files)) {
+          if (!inner.files[innerName].dir && /\.(xml|rels)$/i.test(innerName)) {
+            texts.push(decodeXml(await inner.files[innerName].async("string")));
+          }
+        }
+        const detected = await anonymize(texts.join("\n"));
+        if (detected.key.length > 0) {
+          throw new Error(`${OFFICE_SELFVERIFY_FAILED}: embedded ${name} contains PII`);
+        }
+        continue; // opened + scanned clean
+      }
+      // fell through: unparseable OOXML embed — treat as opaque and byte-scan below
+    }
+    if (needles.length > 0) {
+      const layer = await layerB(new Uint8Array(buffer), needles);
+      if (!layer.pass) {
+        throw new Error(`${OFFICE_SELFVERIFY_FAILED}: embedded ${name} contains PII (${layer.hits.join(", ")})`);
+      }
+    }
+  }
 }
 
 /** Body first, then header1, header2…, then footers, then notes — a stable reading order. */
