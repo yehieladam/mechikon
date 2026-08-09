@@ -19,7 +19,14 @@ import type { AnonymizeResult } from "@engine/types";
 import { highConfidenceSurvivors, layerB, layerC, textLeaks } from "@engine/pdfVerify";
 import type { KeyRow } from "@engine/types";
 import type { RedactedFile, Anonymize } from "./officeRedact";
-import { collectOutlineItems, sanitizeMetadata, type OutlineItem } from "./pdfSanitize";
+import {
+  collectFormFields,
+  collectOutlineItems,
+  sanitizeMetadata,
+  setNeedAppearances,
+  type FormFieldValue,
+  type OutlineItem,
+} from "./pdfSanitize";
 
 // reason: mupdf's ESM/WASM surface (PDFDocument, PDFPage, StructuredText walker) is not worth
 // modelling in the type system; it is narrowly used here and behind a dynamic import.
@@ -135,7 +142,8 @@ export async function extractPdfMapped(buffer: ArrayBuffer): Promise<MappedText>
   return mappedFromDoc(doc);
 }
 
-/** Read every metadata channel's text (Info values, outline titles, annotation text) DECODED. */
+/** Read every metadata channel's text (Info values, outline titles, form field values, annotation
+ * text) DECODED. */
 function readMetadataChannels(doc: any): string {
   const parts: string[] = [];
   const info = doc.getTrailer().get("Info");
@@ -149,6 +157,9 @@ function readMetadataChannels(doc: any): string {
   }
   for (const item of collectOutlineItems(doc)) {
     parts.push(item.title);
+  }
+  for (const field of collectFormFields(doc)) {
+    parts.push(field.value); // AcroForm /V — decoded, so hex-ASCII UTF-16BE strings are not invisible
   }
   const pageCount: number = doc.countPages();
   for (let i = 0; i < pageCount; i += 1) {
@@ -199,6 +210,30 @@ async function selfVerify(bytes: Uint8Array, rows: readonly KeyRow[]): Promise<V
   const terms = highConfidenceSurvivors(rows, candidates);
   const detail = `layerA/meta=${layerAHits.join(",") || "ok"} layerB=${b.hits.join(",") || "ok"} layerC=eof:${c.eofCount}/sx:${c.startxrefCount}`;
   return { terms, detail };
+}
+
+/**
+ * Rewrite one appended range of the unified detection text with its placeholders. Returns the
+ * rewritten string, or null when no replacement falls inside the range (leave the channel untouched).
+ * Shared by outline titles and form field values so both channels apply the SAME unified key.
+ */
+function rewriteRange(
+  combined: string,
+  replacements: readonly { start: number; end: number; placeholder: string }[],
+  start: number,
+  end: number,
+): string | null {
+  const inRange = replacements.filter((r) => r.start >= start && r.end <= end);
+  if (inRange.length === 0) {
+    return null;
+  }
+  let rewritten = "";
+  let cursor = start;
+  for (const r of inRange) {
+    rewritten += combined.slice(cursor, r.start) + r.placeholder;
+    cursor = r.end;
+  }
+  return rewritten + combined.slice(cursor, end);
 }
 
 /** A redaction rect plus the placeholder token to burn onto it. */
@@ -316,11 +351,13 @@ export async function redactPdf(buffer: ArrayBuffer, anonymize: Anonymize): Prom
   }
   const unverifiedImagePages = imageOnlyPageNumbers(doc);
 
-  // UNIFIED detection pass: the body's logical text PLUS every outline (bookmark) title go through ONE
-  // anonymize call, so the same name is the SAME placeholder in the body and in a bookmark (and the
-  // restore key stays coherent). Body spans become glyph-quad rects; outline spans become string
-  // replacements in the titles.
+  // UNIFIED detection pass: the body's logical text PLUS every outline (bookmark) title PLUS every
+  // AcroForm field value (/V — an ID typed into a form field is invisible to the page-text walk) go
+  // through ONE anonymize call, so the same name is the SAME placeholder in the body, a bookmark and a
+  // form field (and the restore key stays coherent). Body spans become glyph-quad rects; outline/field
+  // spans become string replacements written back in place.
   const outlineItems = collectOutlineItems(doc);
+  const formFields = collectFormFields(doc);
   let combined = mapped.text;
   const titleRanges: { start: number; end: number; item: OutlineItem }[] = [];
   for (const item of outlineItems) {
@@ -328,6 +365,13 @@ export async function redactPdf(buffer: ArrayBuffer, anonymize: Anonymize): Prom
     const start = combined.length;
     combined += item.title;
     titleRanges.push({ start, end: combined.length, item });
+  }
+  const fieldRanges: { start: number; end: number; field: FormFieldValue }[] = [];
+  for (const field of formFields) {
+    combined += "\n";
+    const start = combined.length;
+    combined += field.value;
+    fieldRanges.push({ start, end: combined.length, field });
   }
 
   const result: AnonymizeResult = await anonymize(combined);
@@ -357,18 +401,25 @@ export async function redactPdf(buffer: ArrayBuffer, anonymize: Anonymize): Prom
 
   // Outlines: rewrite each title with the unified placeholders (same key as the body).
   for (const { start, end, item } of titleRanges) {
-    const inTitle = replacements.filter((r) => r.start >= start && r.end <= end);
-    if (inTitle.length === 0) {
-      continue;
+    const rewritten = rewriteRange(combined, replacements, start, end);
+    if (rewritten !== null) {
+      item.setTitle(rewritten);
     }
-    let rewritten = "";
-    let cursor = start;
-    for (const r of inTitle) {
-      rewritten += combined.slice(cursor, r.start) + r.placeholder;
-      cursor = r.end;
+  }
+
+  // AcroForm fields: rewrite each /V with the unified placeholders. setValue also drops the field's
+  // stale appearance streams (they render — and physically carry — the OLD value); NeedAppearances
+  // tells viewers to regenerate them from the rewritten /V.
+  let anyFieldRewritten = false;
+  for (const { start, end, field } of fieldRanges) {
+    const rewritten = rewriteRange(combined, replacements, start, end);
+    if (rewritten !== null) {
+      field.setValue(rewritten);
+      anyFieldRewritten = true;
     }
-    rewritten += combined.slice(cursor, end);
-    item.setTitle(rewritten);
+  }
+  if (anyFieldRewritten) {
+    setNeedAppearances(doc);
   }
 
   const PDFPage = mupdf.PDFPage;

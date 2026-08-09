@@ -10,6 +10,14 @@
  */
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
+/** A live PDFObject that is a real (non-null) container. */
+function isReal(obj: any): boolean {
+  return Boolean(obj) && typeof obj.get === "function" && !(obj.isNull?.() ?? false);
+}
+
+/** Malformed /Kids trees can cycle; cap the walk depth instead of trusting the file. */
+const MAX_FIELD_TREE_DEPTH = 32;
+
 /** Delete the Info dictionary (Author/Title/Subject/Keywords + timestamps) from the trailer. */
 export function stripInfo(doc: any): void {
   doc.getTrailer().delete("Info");
@@ -63,12 +71,119 @@ export function clearAnnotationText(doc: any): void {
   }
 }
 
-/** Strip all pure-metadata leak channels (Info, XMP, embedded files, annotation text). */
+/**
+ * Strip form-field side channels that duplicate or shadow the field VALUE, on EVERY field (fail-closed
+ * — we cannot rewrite these coherently, so they must not survive at all):
+ *  - /DV (reset-form default) and /RV (rich-text duplicate of /V) can carry the typed PII verbatim;
+ *  - /XFA on the AcroForm dict is a full XML duplicate of all field data (rewrite not implemented).
+ * The /V values themselves are NOT stripped here — they go through the unified anonymize pass in
+ * redactPdf (collectFormFields below) so the user keeps a filled, restorable form.
+ */
+export function stripFormFieldExtras(doc: any): void {
+  const root = doc.getTrailer().get("Root");
+  const acroForm = isReal(root) ? root.get("AcroForm") : null;
+  if (!isReal(acroForm)) {
+    return;
+  }
+  acroForm.delete("XFA");
+  const visit = (node: any, depth: number): void => {
+    if (!isReal(node) || depth > MAX_FIELD_TREE_DEPTH) {
+      return;
+    }
+    node.delete("DV");
+    node.delete("RV");
+    const kids = node.get("Kids");
+    if (isReal(kids) && kids.isArray?.()) {
+      for (let i = 0; i < kids.length; i += 1) {
+        visit(kids.get(i), depth + 1);
+      }
+    }
+  };
+  const fields = acroForm.get("Fields");
+  if (isReal(fields) && fields.isArray?.()) {
+    for (let i = 0; i < fields.length; i += 1) {
+      visit(fields.get(i), 0);
+    }
+  }
+}
+
+/** Strip all pure-metadata leak channels (Info, XMP, embedded files, annotation text, field extras). */
 export function sanitizeMetadata(doc: any): void {
   stripInfo(doc);
   stripXmp(doc);
   stripEmbeddedFiles(doc);
   clearAnnotationText(doc);
+  stripFormFieldExtras(doc);
+}
+
+/** One AcroForm field with a string value (/V) — readable and rewritable. */
+export interface FormFieldValue {
+  readonly value: string;
+  /** Rewrite /V and drop the now-stale appearance streams (/AP under this field and its widget kids)
+   * so the OLD value can neither render nor survive in the bytes; viewers regenerate the appearance
+   * from the new /V (NeedAppearances is set by the caller when any field was rewritten). */
+  readonly setValue: (value: string) => void;
+}
+
+/**
+ * Walk the AcroForm field tree (Fields + nested Kids) and return every field carrying a STRING value,
+ * with a setter that rewrites /V in place. The caller anonymizes the values through the same unified
+ * pass as the body text, so a form value gets the same placeholder as its body mentions. Non-string
+ * values (checkbox/radio name states like /Yes) carry no free text and are skipped.
+ */
+export function collectFormFields(doc: any): FormFieldValue[] {
+  const items: FormFieldValue[] = [];
+  const deleteAppearances = (node: any, depth: number): void => {
+    if (!isReal(node) || depth > MAX_FIELD_TREE_DEPTH) {
+      return;
+    }
+    node.delete("AP");
+    const kids = node.get("Kids");
+    if (isReal(kids) && kids.isArray?.()) {
+      for (let i = 0; i < kids.length; i += 1) {
+        deleteAppearances(kids.get(i), depth + 1);
+      }
+    }
+  };
+  const visit = (node: any, depth: number): void => {
+    if (!isReal(node) || depth > MAX_FIELD_TREE_DEPTH) {
+      return;
+    }
+    const value = node.get("V");
+    if (value && !(value.isNull?.() ?? false) && (value.isString?.() ?? false)) {
+      items.push({
+        value: value.asString(),
+        setValue: (next: string) => {
+          node.put("V", doc.newString(next));
+          deleteAppearances(node, depth);
+        },
+      });
+    }
+    const kids = node.get("Kids");
+    if (isReal(kids) && kids.isArray?.()) {
+      for (let i = 0; i < kids.length; i += 1) {
+        visit(kids.get(i), depth + 1);
+      }
+    }
+  };
+  const root = doc.getTrailer().get("Root");
+  const acroForm = isReal(root) ? root.get("AcroForm") : null;
+  const fields = isReal(acroForm) ? acroForm.get("Fields") : null;
+  if (isReal(fields) && fields.isArray?.()) {
+    for (let i = 0; i < fields.length; i += 1) {
+      visit(fields.get(i), 0);
+    }
+  }
+  return items;
+}
+
+/** Ask viewers to regenerate field appearances from the rewritten /V values. */
+export function setNeedAppearances(doc: any): void {
+  const root = doc.getTrailer().get("Root");
+  const acroForm = isReal(root) ? root.get("AcroForm") : null;
+  if (isReal(acroForm)) {
+    acroForm.put("NeedAppearances", doc.newBoolean(true));
+  }
 }
 
 /** One outline (bookmark) node with a mutable Title. */
@@ -83,7 +198,6 @@ export interface OutlineItem {
  */
 export function collectOutlineItems(doc: any): OutlineItem[] {
   const items: OutlineItem[] = [];
-  const isReal = (obj: any): boolean => obj && typeof obj.get === "function" && !(obj.isNull?.() ?? false);
   const root = doc.getTrailer().get("Root");
   const outlines = isReal(root) ? root.get("Outlines") : null;
   if (!isReal(outlines)) {

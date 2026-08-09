@@ -256,6 +256,83 @@ describe("redactPdf — pdfUnverified soft warning is HIGH-CONFIDENCE only (B2)"
   });
 });
 
+describe("redactPdf — AcroForm field values (/V) are redacted and verified", () => {
+  /** A one-page PDF with body text plus a filled AcroForm text field (an ID typed into the form). */
+  async function formPdf(fieldValue: string): Promise<ArrayBuffer> {
+    // reason: mupdf's WASM surface is untyped; narrowly used to author a crafted form PDF.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mupdf = (await import("mupdf")) as any;
+    const doc = new mupdf.PDFDocument();
+    const font = doc.addSimpleFont(new mupdf.Font("Helvetica"));
+    const fonts = doc.newDictionary();
+    fonts.put("F1", font);
+    const resources = doc.newDictionary();
+    resources.put("Font", fonts);
+    doc.insertPage(-1, doc.addPage([0, 0, 612, 792], 0, resources, "BT /F1 12 Tf 50 700 Td (application form) Tj ET"));
+    const pageObj = doc.loadPage(0).getObject();
+    const field = doc.addObject(doc.newDictionary());
+    field.put("FT", doc.newName("Tx"));
+    field.put("T", doc.newString("idNumber"));
+    field.put("V", doc.newString(fieldValue));
+    field.put("Type", doc.newName("Annot"));
+    field.put("Subtype", doc.newName("Widget"));
+    const rect = doc.newArray();
+    for (const n of [50, 600, 300, 620]) {
+      rect.push(n);
+    }
+    field.put("Rect", rect);
+    field.put("P", pageObj);
+    const annots = doc.newArray();
+    annots.push(field);
+    pageObj.put("Annots", annots);
+    const acroFields = doc.newArray();
+    acroFields.push(field);
+    const acroForm = doc.newDictionary();
+    acroForm.put("Fields", acroFields);
+    doc.getTrailer().get("Root").put("AcroForm", acroForm);
+    return new Uint8Array(doc.saveToBuffer({}).asUint8Array()).buffer as ArrayBuffer;
+  }
+
+  /** Read the first AcroForm field's /V from raw structure (independent of the implementation). */
+  // reason: mupdf's WASM surface is untyped.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function firstFieldValue(doc: any): string {
+    return doc.getTrailer().get("Root").get("AcroForm").get("Fields").get(0).get("V").asString();
+  }
+
+  it("rewrites a field /V holding an ID to the placeholder; the ID is gone from the bytes", async () => {
+    const ID = "123456709";
+    const buf = await formPdf(ID);
+    const { bytes, result, pdfUnverified } = await redactPdf(buf, anonymizeDeterministic);
+    expect(result.key.map((r) => r.original)).toContain(ID); // the form value WAS detected
+    // reason: mupdf's WASM surface is untyped.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mupdf = (await import("mupdf")) as any;
+    const doc = mupdf.PDFDocument.openDocument(bytes, "application/pdf");
+    const value = firstFieldValue(doc);
+    expect(value).not.toContain(ID);
+    expect(value).toMatch(/\[ID_\d+\]/); // same unified key as the body
+    const b = await layerB(bytes, [ID]); // physically gone (incl. any appearance stream)
+    expect(b.pass).toBe(true);
+    expect(pdfUnverified).toBeUndefined(); // verified clean, no warning needed
+  });
+
+  it("self-verify READS field values: a /V survivor is caught and warned, not shipped silently", async () => {
+    const ID = "123456709";
+    const buf = await formPdf(ID);
+    // An anonymize that CLAIMS the ID was handled (clean AI-text + key row) but supplies no span —
+    // if the /V rewrite channel regressed, the value would survive; the verify channel must catch it.
+    const claim = (text: string): AnonymizeResult => ({
+      anonymizedText: text.split(ID).join("[ID_1]"),
+      spans: [],
+      key: [{ placeholder: "[ID_1]", original: ID, type: "ISRAELI_ID" }],
+    });
+    const { pdfUnverified } = await redactPdf(buf, claim);
+    expect(pdfUnverified).toBeDefined();
+    expect(pdfUnverified!.terms).toContain(ID);
+  });
+});
+
 describe("extractPdfMapped — synthetic (logical-authored) fixture documents the trap", () => {
   it("finds the ID but extracts the Hebrew name REVERSED (the PDF-03 pitfall)", async () => {
     const mapped = await extractPdfMapped(readAsArrayBuffer("web/test-fixtures/hebrew.pdf"));
