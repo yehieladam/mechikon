@@ -252,6 +252,9 @@ export function App() {
   const [scannedNotice, setScannedNotice] = useState(false);
   const [formulaNotice, setFormulaNotice] = useState(false);
   const [selfVerifyNotice, setSelfVerifyNotice] = useState(false);
+  // Mixed digital+scanned PDF (B3): image-only pages we could not verify clean. The file is still
+  // produced and downloadable; this drives a NON-blocking per-page warning. 1-based page numbers.
+  const [unverifiedImagePages, setUnverifiedImagePages] = useState<readonly number[]>([]);
   // Scanned-PDF OCR (Stage 5): a scan awaiting the NER model before its single OCR pass, the live
   // per-page progress, and the two-tier refusal ("lowQuality" = readable-poorly; "unsafe" = the rare
   // internal-safety refusals SCAN_UNMAPPABLE_PII / SCAN_SELFVERIFY_FAILED).
@@ -332,6 +335,7 @@ export function App() {
     setRedacted(null);
     setScannedNotice(false);
     setScanNotice(null); // a fresh result clears any leftover scan refusal from a prior file
+    setUnverifiedImagePages([]); // and any prior mixed-PDF per-page warning
     // Any result mints a NEW key, so an earlier download no longer covers it.
     setKeyDownloaded(false);
     setPassphraseMissing(false);
@@ -388,7 +392,7 @@ export function App() {
         if (!isCancelled?.()) setScanProgress(event);
       });
       try {
-        const { result, bytes } = await getEngine().redactFile(
+        const { result, bytes, unverifiedImagePages: unverified } = await getEngine().redactFile(
           name,
           buffer,
           terms,
@@ -402,6 +406,7 @@ export function App() {
         if (bytes) {
           setRedacted({ bytes, name: redactedName(name), mime: mimeFor(name) });
         }
+        setUnverifiedImagePages(unverified ?? []); // after showResult (which cleared it)
       } catch (error) {
         if (isCancelled?.()) return;
         setRedacted(null);
@@ -457,7 +462,7 @@ export function App() {
           }
         }
         setSource({ kind: "file", name: file.name, buffer });
-        const { result: anonymized, bytes } = await getEngine().redactFile(
+        const { result: anonymized, bytes, unverifiedImagePages: unverified } = await getEngine().redactFile(
           file.name,
           buffer,
           [],
@@ -470,6 +475,7 @@ export function App() {
         if (bytes) {
           setRedacted({ bytes, name: redactedName(file.name), mime: mimeFor(file.name) });
         }
+        setUnverifiedImagePages(unverified ?? []); // mixed-PDF per-page warning (after showResult cleared it)
         if (!manualOnlyRef.current) {
           void loadNer();
         }
@@ -1148,6 +1154,14 @@ export function App() {
               role="alert"
             >
               {scanNotice === "lowQuality" ? t("input.scanLowQuality") : t("input.scanUnsafe")}
+            </div>
+          )}
+          {unverifiedImagePages.length > 0 && (
+            <div
+              className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-[13px] leading-relaxed text-amber-800"
+              role="alert"
+            >
+              {t("result.unverifiedImagePages", { pages: unverifiedImagePages.join(", ") })}
             </div>
           )}
           {scanProgress && (
