@@ -33,7 +33,7 @@ type Source =
   | { readonly kind: "file"; readonly name: string; readonly buffer: ArrayBuffer; readonly scan?: boolean };
 
 /** AGPL-3.0 §13: users interacting over a network must be offered the corresponding source. */
-const SOURCE_URL = "https://github.com/yehieladam/anon-extension";
+const SOURCE_URL = "https://github.com/yehieladam/mechikon-source";
 const COPIED_RESET_MS = 1500;
 const COPY_TOAST_MS = 2000;
 /** How long the transient "N names added" notice (M4) stays before it fades out. */
