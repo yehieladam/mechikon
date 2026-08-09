@@ -84,3 +84,48 @@ describe("layerB", () => {
     expect(result.pass).toBe(true);
   });
 });
+
+describe("highConfidenceSurvivors — B2 soft-warn filter (full-value survivals only, no fragment noise)", () => {
+  // Owner decision (#90 context): the pdfUnverified warning was removed because layer B's raw-byte
+  // SUBSTRING scan fired on short name fragments inside unrelated words. The warning comes back only
+  // for HIGH-CONFIDENCE survivors: structured values, or a full multi-token name surface.
+  it("keeps a structured value (ID) that hit — a full identifier surviving is always a real signal", async () => {
+    const { highConfidenceSurvivors } = await import("./pdfVerify");
+    const rows = [{ original: "123456709", type: "ISRAELI_ID" as const }];
+    expect(highConfidenceSurvivors(rows, ["123456709"])).toEqual(["123456709"]);
+  });
+
+  it("drops a single short PERSON fragment that only substring-matched (the #90 noise)", async () => {
+    const { highConfidenceSurvivors } = await import("./pdfVerify");
+    const rows = [{ original: "דן", type: "PERSON" as const }];
+    // layer B substring-matched "דן" inside "ירדן" — NOT a whole-value survival, never warned.
+    expect(highConfidenceSurvivors(rows, ["דן"])).toEqual([]);
+  });
+
+  it("keeps a full multi-token PERSON whose complete surface survived", async () => {
+    const { highConfidenceSurvivors } = await import("./pdfVerify");
+    const rows = [{ original: "ישראל ישראלי", type: "PERSON" as const }];
+    expect(highConfidenceSurvivors(rows, ["ישראל ישראלי"])).toEqual(["ישראל ישראלי"]);
+  });
+
+  it("treats a digits-only MANUAL term as structured (digit-bounded hits are meaningful)", async () => {
+    const { highConfidenceSurvivors } = await import("./pdfVerify");
+    const rows = [{ original: "987654321", type: "MANUAL" as const }];
+    expect(highConfidenceSurvivors(rows, ["987654321"])).toEqual(["987654321"]);
+  });
+
+  it("drops a single-token MANUAL word (same fragment-noise class as a short name)", async () => {
+    const { highConfidenceSurvivors } = await import("./pdfVerify");
+    const rows = [{ original: "Dan", type: "MANUAL" as const }];
+    expect(highConfidenceSurvivors(rows, ["Dan"])).toEqual([]);
+  });
+
+  it("only surfaces rows that actually hit", async () => {
+    const { highConfidenceSurvivors } = await import("./pdfVerify");
+    const rows = [
+      { original: "123456709", type: "ISRAELI_ID" as const },
+      { original: "052-1234567", type: "IL_PHONE" as const },
+    ];
+    expect(highConfidenceSurvivors(rows, ["052-1234567"])).toEqual(["052-1234567"]);
+  });
+});

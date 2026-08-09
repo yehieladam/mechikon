@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import { extractPdfMapped, redactPdf, NO_TEXT_LAYER } from "./pdfRedact";
 import { collectOutlineItems } from "./pdfSanitize";
 import { anonymizeDeterministic, anonymizeFull, detectDeterministic } from "@engine/pipeline";
+import type { AnonymizeResult } from "@engine/types";
 import { quadsForSpan, refsToRects } from "@engine/pdfText";
 import { layerB, layerC } from "@engine/pdfVerify";
 
@@ -194,6 +195,64 @@ describe("redactPdf refuses a PDF with no text layer (scanned/image)", () => {
     doc.insertPage(-1, doc.addPage([0, 0, 200, 200], 0, doc.newDictionary(), "1 0 0 rg 0 0 200 200 re f"));
     const bytes = new Uint8Array(doc.saveToBuffer({}).asUint8Array()).buffer;
     await expect(redactPdf(bytes, anonymizeDeterministic)).rejects.toThrow(NO_TEXT_LAYER);
+  });
+});
+
+describe("redactPdf — pdfUnverified soft warning is HIGH-CONFIDENCE only (B2)", () => {
+  // Build a minimal text PDF in-process (Helvetica simple font → the content stream carries the
+  // literal ASCII text, which is exactly what layer B's raw-byte scan sees after inflating).
+  async function latinPdf(text: string): Promise<ArrayBuffer> {
+    // reason: mupdf's WASM surface is untyped; narrowly used to author a crafted test PDF.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mupdf = (await import("mupdf")) as any;
+    const doc = new mupdf.PDFDocument();
+    const font = doc.addSimpleFont(new mupdf.Font("Helvetica"));
+    const fonts = doc.newDictionary();
+    fonts.put("F1", font);
+    const resources = doc.newDictionary();
+    resources.put("Font", fonts);
+    const contents = `BT /F1 12 Tf 50 700 Td (${text}) Tj ET`;
+    doc.insertPage(-1, doc.addPage([0, 0, 612, 792], 0, resources, contents));
+    return new Uint8Array(doc.saveToBuffer({}).asUint8Array()).buffer as ArrayBuffer;
+  }
+
+  /** An anonymize stub that CLAIMS the value is redacted (clean AI-text + key row) but supplies NO
+   * span — so the quad redaction never removes it from the page and it must survive into self-verify.
+   * Models the exact B2 leak: redaction quads missed a value the key says was handled. */
+  const claimRedacted =
+    (original: string, type: "ISRAELI_ID" | "PERSON", placeholder: string) =>
+    (text: string): AnonymizeResult => ({
+      anonymizedText: text.split(original).join(placeholder),
+      spans: [],
+      key: [{ placeholder, original, type }],
+    });
+
+  it("WARNS when a full ID survives the redaction quads — pdfUnverified names it, bytes still produced", async () => {
+    const buf = await latinPdf("hello 123456709 world");
+    const { bytes, pdfUnverified } = await redactPdf(buf, claimRedacted("123456709", "ISRAELI_ID", "[ID_1]"));
+    expect(bytes.length).toBeGreaterThan(0); // NON-blocking: the download stays available
+    expect(pdfUnverified).toBeDefined();
+    expect(pdfUnverified!.terms).toContain("123456709");
+  });
+
+  it("WARNS when a full multi-token PERSON surface survives whole", async () => {
+    const buf = await latinPdf("contract of Israel Israeli signed here");
+    const { bytes, pdfUnverified } = await redactPdf(
+      buf,
+      claimRedacted("Israel Israeli", "PERSON", "[NAME_1]"),
+    );
+    expect(bytes.length).toBeGreaterThan(0);
+    expect(pdfUnverified).toBeDefined();
+    expect(pdfUnverified!.terms).toContain("Israel Israeli");
+  });
+
+  it("does NOT warn when a short name fragment only substring-matches inside another word (no noise)", async () => {
+    // "Dan" was (per the key) redacted; the page text only contains "Danube", whose raw bytes
+    // substring-match "Dan" in layer B. That is the #90 false positive — it must NOT resurface.
+    const buf = await latinPdf("the Danube river flows east");
+    const { bytes, pdfUnverified } = await redactPdf(buf, claimRedacted("Dan", "PERSON", "[NAME_1]"));
+    expect(bytes.length).toBeGreaterThan(0);
+    expect(pdfUnverified).toBeUndefined(); // no warning, no noise — the value did not survive whole
   });
 });
 

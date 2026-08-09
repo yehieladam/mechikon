@@ -19,6 +19,7 @@
  */
 
 import { occursAsWholeWord } from "./occurrences";
+import type { EntityType, KeyRow } from "./types";
 
 const utf8Encoder = new TextEncoder();
 
@@ -104,6 +105,59 @@ export function textLeaks(bodyText: string, metaText: string, needles: readonly 
     const name = stripControls(needle).trim();
     return name.length > 0 && wholeWordLeak(name);
   });
+}
+
+/**
+ * Structured (deterministic/scan-numeric) types: the needle is a complete identifier, so any verified
+ * hit of it (whole-word/digit-bounded text hit, or a raw-byte hit of the full value) is a real,
+ * targeted leak signal — never fragment noise.
+ */
+const STRUCTURED_TYPES: ReadonlySet<EntityType> = new Set<EntityType>([
+  "ISRAELI_ID",
+  "IL_COMPANY",
+  "IL_PHONE",
+  "IL_IBAN",
+  "IL_CASE",
+  "IL_LAND",
+  "IL_POLICY",
+  "IL_INSURED",
+  "EMAIL_ADDRESS",
+  "IL_NUMBER",
+]);
+
+/**
+ * B2 soft-warn filter — which surviving needles are worth WARNING the user about. Owner decision
+ * (PR #90 context): a naive pdfUnverified warning fired on short name fragments whose bytes merely
+ * substring-matched inside unrelated words (layer B is a raw-byte substring scan by design — it must
+ * stay paranoid). The user-facing warning therefore surfaces only HIGH-CONFIDENCE FULL-VALUE
+ * survivals:
+ *  - a STRUCTURED value (ID/phone/company/IBAN/email/case/land/policy/insured — or any digits-only
+ *    surface, e.g. a numeric MANUAL term): the complete identifier surviving is always meaningful;
+ *  - a FULL MULTI-TOKEN name surface (PERSON/ORG/LOCATION/manual text) — every hit is computed on the
+ *    complete surface, so a hit on "ישראל ישראלי" means the whole name survived, not a fragment.
+ * A single-token name fragment ("דן", "Dan") is dropped: it cannot be told apart from a coincidental
+ * substring of a longer legit word, and that noise is exactly what got the warning removed in #90.
+ * Pure; `hitTerms` are the needles layer A / layer B actually flagged.
+ */
+export function highConfidenceSurvivors(
+  rows: readonly Pick<KeyRow, "original" | "type">[],
+  hitTerms: readonly string[],
+): string[] {
+  const hits = new Set(hitTerms);
+  const seen = new Set<string>();
+  const survivors: string[] = [];
+  for (const row of rows) {
+    if (!hits.has(row.original) || seen.has(row.original)) {
+      continue;
+    }
+    seen.add(row.original);
+    const isStructured = STRUCTURED_TYPES.has(row.type) || /^\d+$/.test(normalizeForLeak(row.original));
+    const isFullMultiToken = stripControls(row.original).trim().split(/\s+/).filter(Boolean).length >= 2;
+    if (isStructured || isFullMultiToken) {
+      survivors.push(row.original);
+    }
+  }
+  return survivors;
 }
 
 /** A stream whose payload is a font program or image — skip it (binary false positives). */

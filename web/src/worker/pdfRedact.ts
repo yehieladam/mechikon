@@ -16,7 +16,8 @@ import {
 } from "@engine/pdfText";
 import { toReplacements } from "@engine/overlay";
 import type { AnonymizeResult } from "@engine/types";
-import { layerB, layerC, textLeaks } from "@engine/pdfVerify";
+import { highConfidenceSurvivors, layerB, layerC, textLeaks } from "@engine/pdfVerify";
+import type { KeyRow } from "@engine/types";
 import type { RedactedFile, Anonymize } from "./officeRedact";
 import { collectOutlineItems, sanitizeMetadata, type OutlineItem } from "./pdfSanitize";
 
@@ -168,17 +169,18 @@ function readMetadataChannels(doc: any): string {
  * reading Info/outlines/annotations is the reliable check there).
  */
 interface VisualVerify {
-  readonly ok: boolean;
-  /** The specific terms that could not be confirmed absent (layerA text + layerB bytes) — named to the
-   * user so the download is an informed, targeted check ("טל" reads as a harmless abbreviation; a real
-   * surviving name jumps out). Empty when ok. */
+  /** The HIGH-CONFIDENCE survivors (engine/pdfVerify highConfidenceSurvivors): structured values, or
+   * full multi-token name surfaces, that layer A / layer B actually flagged — named to the user so the
+   * download is an informed, targeted check. Single short name fragments that merely substring-match
+   * inside unrelated words (the #90 noise) are filtered OUT and never warned. Empty when clean. */
   readonly terms: readonly string[];
   readonly detail: string;
 }
 
-async function selfVerify(bytes: Uint8Array, needles: readonly string[]): Promise<VisualVerify> {
+async function selfVerify(bytes: Uint8Array, rows: readonly KeyRow[]): Promise<VisualVerify> {
+  const needles = [...new Set(rows.map((row) => row.original))];
   if (needles.length === 0) {
-    return { ok: true, terms: [], detail: "ok" };
+    return { terms: [], detail: "ok" };
   }
   const mupdf: any = await import("mupdf");
   const doc = mupdf.PDFDocument.openDocument(bytes, "application/pdf");
@@ -190,10 +192,13 @@ async function selfVerify(bytes: Uint8Array, needles: readonly string[]): Promis
   // Layers B + C — raw-byte scan (incl. inflated streams) and structure check.
   const b = await layerB(bytes, needles);
   const c = layerC(bytes);
-  const ok = layerAHits.length === 0 && b.pass && c.pass;
-  const terms = [...new Set([...layerAHits, ...b.hits.map((h) => h.split(" [")[0])])];
+  // Warn only on HIGH-CONFIDENCE FULL-VALUE survivals (type-aware; see highConfidenceSurvivors). A
+  // layer-C-only anomaly without any surviving value is not a PII-survival signal — layer B already
+  // scanned every generation's bytes for every value — and SAFE_SAVE_OPTIONS pins layer C in tests.
+  const candidates = [...new Set([...layerAHits, ...b.hits.map((h) => h.split(" [")[0])])];
+  const terms = highConfidenceSurvivors(rows, candidates);
   const detail = `layerA/meta=${layerAHits.join(",") || "ok"} layerB=${b.hits.join(",") || "ok"} layerC=eof:${c.eofCount}/sx:${c.startxrefCount}`;
-  return { ok, terms, detail };
+  return { terms, detail };
 }
 
 /** A redaction rect plus the placeholder token to burn onto it. */
@@ -399,10 +404,14 @@ export async function redactPdf(buffer: ArrayBuffer, anonymize: Anonymize): Prom
   const bytes = new Uint8Array(doc.saveToBuffer(SAFE_SAVE_OPTIONS).asUint8Array());
   // VISUAL self-verify: gates only whether we can CERTIFY the redacted PDF clean. On failure we no longer
   // withhold the file — the owner reviews the preview and can add missed terms — but we surface a warning
-  // (pdfUnverified) so the download is an INFORMED choice, not a blind one. The Word deliverable above is
-  // already hard-verified. layerB/layerC (byte + structure) still ran inside selfVerify.
-  const verify = await selfVerify(bytes, result.key.map((row) => row.original));
-  const pdfUnverified = verify.ok ? undefined : { reason: verify.detail, terms: verify.terms };
+  // (pdfUnverified) so the download is an INFORMED choice, not a blind one. The warning is SOFT and
+  // HIGH-CONFIDENCE only (B2): it fires when a structured value or a full multi-token name surface
+  // genuinely survived, never on a short fragment's coincidental substring match (the #90 noise). The
+  // Word deliverable above is already hard-verified. layerB/layerC (byte + structure) still ran inside
+  // selfVerify.
+  const verify = await selfVerify(bytes, result.key);
+  const pdfUnverified =
+    verify.terms.length > 0 ? { reason: verify.detail, terms: verify.terms } : undefined;
   return {
     bytes,
     result,
