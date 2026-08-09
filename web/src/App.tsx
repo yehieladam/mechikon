@@ -18,6 +18,8 @@ import { mimeFor } from "./lib/mime";
 import { exceedsKeyFileLimit, exceedsUploadLimit } from "./lib/uploadLimits";
 import { isScanOcrEnabled } from "./lib/scanFlag";
 import { scanNoticeFor } from "./lib/scanNotice";
+import { selectActiveKey, uploadedKeyStateAfterResult } from "./lib/restoreKey";
+import { fileDownloadGate } from "./lib/downloadGate";
 import { loadNer, useNer } from "./worker/nerController";
 
 /** Progress of the slow scanned-PDF OCR op (Stage 5). "model" = the one-time NER load precedes OCR. */
@@ -332,6 +334,11 @@ export function App() {
   const [restoreUnmatched, setRestoreUnmatched] = useState(0);
   // M4: transient count of names the NER upgrade pass just added, so the silent upgrade is acknowledged.
   const [nerAdded, setNerAdded] = useState<number | null>(null);
+  // H-race: true while the names-upgrade re-run for a file source is in flight. The model flipping to
+  // "ready" is NOT enough to enable the download — the upgraded bytes are set asynchronously afterwards,
+  // and until then `redacted` still holds the pre-names deterministic bytes. This keeps the pending pill
+  // (download withheld) through the WHOLE upgrade, not just until ner.status flips.
+  const [nerUpgrading, setNerUpgrading] = useState(false);
   // A whole-file restore downloads a file (no on-screen restoredText), so a boolean drives its success
   // confirmation line independently of the unmatched count (which can legitimately be 0).
   const [restoreFileDone, setRestoreFileDone] = useState(false);
@@ -357,6 +364,17 @@ export function App() {
     // document keeps keyEverDownloaded, so it shows the quiet "key changed" delta (G4).
     if (isNewDocument) {
       setKeyEverDownloaded(false);
+      // H-stalekey: a brand-new document owns its OWN restore key. Drop any key uploaded (or being
+      // unlocked) for a PRIOR document, otherwise activeKey would keep pointing at the old key and
+      // restore this document's tokens against the wrong rows (writing the old originals in, silently).
+      const keyState = uploadedKeyStateAfterResult(
+        { uploadedKey: null, pendingEnc: null, unlockPassphrase: "" },
+        true,
+      );
+      setUploadedKey(keyState.uploadedKey);
+      setPendingEnc(keyState.pendingEnc);
+      setUnlockPassphrase(keyState.unlockPassphrase);
+      setKeyError(null);
     }
   }, []);
 
@@ -566,6 +584,10 @@ export function App() {
     if (manualOnlyRef.current || ner.status !== "ready" || wasReady || source === null) {
       return;
     }
+    // H-race: hold the download through the WHOLE upgrade. ner.status is already "ready" here, so the
+    // file-download gate would otherwise enable the button while `redacted` still holds the pre-names
+    // deterministic bytes. The flag drops only once the upgraded bytes are committed (finally below).
+    setNerUpgrading(true);
     let cancelled = false;
     void (async () => {
       try {
@@ -614,6 +636,10 @@ export function App() {
           setFileError(true);
           setRedacted(null);
         }
+      } finally {
+        // Re-open the download gate once the upgrade has committed (or failed / been cancelled). The
+        // scan branch manages its own bytes via runScanRedaction; clearing here still re-enables the gate.
+        setNerUpgrading(false);
       }
     })();
     return () => {
@@ -877,7 +903,7 @@ export function App() {
   }, [result, busy, t, openRestore]);
 
   // Prefer an uploaded key (restore in a later/fresh session) over the in-memory session key.
-  const activeKey = uploadedKey ?? result?.key ?? null;
+  const activeKey = selectActiveKey(uploadedKey, result?.key ?? null);
 
   // M1: text pasted into the MAIN input that carries 2+ placeholder tokens is almost certainly an AI
   // answer coming back, not a document to redact. Offer to route it into the restore flow instead of
@@ -1322,31 +1348,42 @@ export function App() {
                 </button>
               </div>
               <div className="flex items-center gap-2">
-                {redacted &&
-                  // Safety (manual mode, zero redactions): the "redacted" file would be byte-identical to
-                  // the original yet named "_מושחר" — a leak-shaped footgun. Withhold the download until
-                  // the user has hidden at least one value.
-                  !(manualOnly && result.key.length === 0) &&
-                  // A redacted FILE only has names removed once NER has settled. Never hand back the
-                  // file before that (trust: no second chance). While loading -> a pending pill; if the
-                  // model FAILED -> withhold the download entirely and offer a retry (the deterministic
-                  // ID/phone/company chips are already shown, so nothing detected is hidden). Manual-only
-                  // never uses NER, so its result is final immediately — skip the NER gate entirely.
-                  (!manualOnly &&
-                  source?.kind === "file" &&
-                  (ner.status === "loading" || ner.status === "idle") ? (
-                    <span className="inline-flex min-h-[44px] items-center gap-1.5 rounded-full border border-hairline px-4 text-[13px] font-medium text-zinc-400">
-                      {t("result.downloadPending")}
-                    </span>
-                  ) : !manualOnly && source?.kind === "file" && ner.status === "error" ? (
-                    <button
-                      type="button"
-                      onClick={onRetryNer}
-                      className="inline-flex min-h-[44px] items-center gap-1.5 rounded-full border border-red-300 bg-red-50 px-4 text-[13px] font-medium text-red-700 transition hover:bg-red-100"
-                    >
-                      {t("result.retryNames")}
-                    </button>
-                  ) : (
+                {/* The download affordance is decided by a single pure predicate (fileDownloadGate):
+                    hidden (manual mode, zero redactions -> a byte-identical "_מושחר" file), pending (a
+                    file whose names-upgrade has not settled -> withhold the download, incl. the H-race
+                    window where the model is ready but the upgraded bytes are not yet committed), retry
+                    (the model failed to load) or ready. */}
+                {(() => {
+                  const gate = fileDownloadGate({
+                    hasRedacted: redacted !== null,
+                    manualOnly,
+                    keyCount: result.key.length,
+                    sourceKind: source?.kind ?? null,
+                    nerStatus: ner.status,
+                    nerUpgrading,
+                  });
+                  if (gate === "hidden") {
+                    return null;
+                  }
+                  if (gate === "pending") {
+                    return (
+                      <span className="inline-flex min-h-[44px] items-center gap-1.5 rounded-full border border-hairline px-4 text-[13px] font-medium text-zinc-400">
+                        {t("result.downloadPending")}
+                      </span>
+                    );
+                  }
+                  if (gate === "retry") {
+                    return (
+                      <button
+                        type="button"
+                        onClick={onRetryNer}
+                        className="inline-flex min-h-[44px] items-center gap-1.5 rounded-full border border-red-300 bg-red-50 px-4 text-[13px] font-medium text-red-700 transition hover:bg-red-100"
+                      >
+                        {t("result.retryNames")}
+                      </button>
+                    );
+                  }
+                  return (
                     <button
                       type="button"
                       onClick={onDownload}
@@ -1364,7 +1401,8 @@ export function App() {
                       </svg>
                       {t("result.download")}
                     </button>
-                  ))}
+                  );
+                })()}
               </div>
             </div>
 
