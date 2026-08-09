@@ -8,9 +8,12 @@
  * worker); the node reality test injects a node tesseract. So this module is testable end-to-end without
  * a DOM, and the engine stays framework-free.
  *
- * Whole-file refusal (Stage-1/3 rulings): ANY page failing the scan-quality gate (SCAN_LOW_CONFIDENCE)
- * or yielding an unmappable standard detection (SCAN_UNMAPPABLE_PII) throws before any bytes are
- * returned — never hand back a doc where one page is unreliable.
+ * Produce + per-page warning (owner decision): a page that fails the scan-quality gate is NOT redacted
+ * and is reported in `unverifiedImagePages` (1-based) so the UI warns per page, rather than refusing the
+ * whole file for one unreadable page. Only when EVERY page is unverified (a whole-document unreadable
+ * scan) do we still refuse with SCAN_LOW_CONFIDENCE — producing an all-unverified file is pointless. An
+ * unmappable standard detection (SCAN_UNMAPPABLE_PII) is a detected-but-uncoverable PII and still throws
+ * (fail closed), as does a self-verify failure (a redaction that left PII behind).
  */
 import { evaluateScanQuality, SCAN_LOW_CONFIDENCE } from "@engine/scanGate";
 import { detectScanPii, type ScanDetection } from "@engine/detectScanPii";
@@ -74,6 +77,7 @@ export async function redactScan(
   const allSpans: Span[] = [];
 
   const redactedPages: number[] = []; // pages that actually got >=1 rect — the only ones worth re-verifying
+  const unverifiedImagePages: number[] = []; // 1-based pages that failed the quality gate (produce + warn)
   const pageCount: number = doc.countPages();
   for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
     const page = doc.loadPage(pageIndex);
@@ -86,9 +90,13 @@ export async function redactScan(
     const ocrPage = await ocr(new Uint8Array(pixmap.asPNG()));
     pixmap.destroy(); // free the multi-MB WASM bitmap now — a multi-page scan otherwise grows the heap unboundedly
 
-    // Quality gate: an unreliable page refuses the WHOLE file (never partially redact a scan we can't read).
+    // Quality gate: a page we cannot read reliably is NOT redacted and is flagged for a per-page warning
+    // (owner decision: produce + warn, not whole-file refuse). If EVERY page is unverified the file is
+    // useless and we refuse below (keeps the whole-document unreadable-scan refusal). Skip this page's
+    // detection/redaction so its unread content is reported rather than silently shipped as "clean".
     if (!evaluateScanQuality(ocrPage).ok) {
-      throw new Error(SCAN_LOW_CONFIDENCE);
+      unverifiedImagePages.push(pageIndex + 1);
+      continue;
     }
 
     // Detect (may throw SCAN_UNMAPPABLE_PII on a span we cannot cover). Accumulate text + shifted spans
@@ -121,6 +129,14 @@ export async function redactScan(
     }
   }
 
+  // Every page unreadable → nothing was redacted or verified → refuse (a whole-document unreadable scan;
+  // producing an all-unverified file is pointless). A MIXED / partially-readable file falls through to
+  // produce + warn with the unverified pages reported.
+  if (unverifiedImagePages.length === pageCount) {
+    doc.destroy();
+    throw new Error(SCAN_LOW_CONFIDENCE);
+  }
+
   // Strip the invisible metadata leak channels (Info, XMP, embedded files, annotation text).
   sanitizeMetadata(doc);
   // Blank outline (bookmark) titles. The digital redactPdf path anonymizes them coherently with the body
@@ -146,7 +162,7 @@ export async function redactScan(
     throw new Error(SCAN_SELFVERIFY_FAILED);
   }
   const result: AnonymizeResult = { anonymizedText: tokenized.anonymizedText, spans: [], key };
-  return { bytes, result };
+  return { bytes, result, ...(unverifiedImagePages.length > 0 ? { unverifiedImagePages } : {}) };
 }
 
 /**

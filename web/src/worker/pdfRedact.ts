@@ -43,14 +43,15 @@ const NO_TEXT_LAYER_MIN_CHARS = 3;
 const IMAGE_ONLY_COVER_MIN = 0.5;
 
 /**
- * Per-page scan classification (B3): does ANY page carry almost no extractable text (< MIN_CHARS
- * non-whitespace) yet is mostly covered by an image? That page is image-only — burned-in content our
- * glyph-based text detection is blind to, so redacting the file on the text path would hand back a
- * silently under-redacted document (one digital page must not mark a whole mixed file "text"). A
- * genuinely blank page (no text AND no large image) is NOT image-only, so it never forces OCR/refusal.
- * `preserve-images` is required for onImageBlock to fire (default stext drops image blocks).
+ * Per-page scan classification (B3): the 1-based numbers of pages that carry almost no extractable text
+ * (< MIN_CHARS non-whitespace) yet are mostly covered by an image — image-only pages, burned-in content
+ * our glyph-based text detection is blind to. On a MIXED file these are the pages the text path cannot
+ * verify clean (reported to the user for a per-page warning). A genuinely blank page (no text AND no
+ * large image) is NOT image-only, so it is never flagged. `preserve-images` is required for onImageBlock
+ * to fire (default stext drops image blocks).
  */
-function hasImageOnlyPage(doc: any): boolean {
+function imageOnlyPageNumbers(doc: any): number[] {
+  const pages: number[] = [];
   const pageCount: number = doc.countPages();
   for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
     const page = doc.loadPage(pageIndex);
@@ -70,24 +71,24 @@ function hasImageOnlyPage(doc: any): boolean {
       },
     });
     if (textChars < NO_TEXT_LAYER_MIN_CHARS && maxImageCover >= IMAGE_ONLY_COVER_MIN) {
-      return true;
+      pages.push(pageIndex + 1); // 1-based, for the UI warning
     }
   }
-  return false;
+  return pages;
 }
 
 /**
  * Classify a PDF as text-layer vs scanned (image-only) — shared so the dispatcher can ROUTE (scan → OCR
  * path) instead of hitting the NO_TEXT_LAYER refusal. Scanned = the WHOLE document has no usable text OR
  * ANY single page is image-only (a mixed digital+scanned file, B3). A cheap extra mupdf open; OCR dwarfs
- * it. redactPdf keeps its own NO_TEXT_LAYER throw as a backstop.
+ * it. redactPdf keeps its own NO_TEXT_LAYER throw (whole-doc scan) + per-page warning as a backstop.
  */
 export async function isScannedPdf(buffer: ArrayBuffer): Promise<boolean> {
   const mupdf: any = await import("mupdf");
   const doc = mupdf.PDFDocument.openDocument(new Uint8Array(buffer), "application/pdf");
   try {
     const wholeDocNoText = mappedFromDoc(doc).text.replace(/\s/g, "").length < NO_TEXT_LAYER_MIN_CHARS;
-    return wholeDocNoText || hasImageOnlyPage(doc);
+    return wholeDocNoText || imageOnlyPageNumbers(doc).length > 0;
   } finally {
     doc.destroy(); // do not leak the classification doc — the caller re-opens for the real pass
   }
@@ -299,13 +300,16 @@ export async function redactPdf(buffer: ArrayBuffer, anonymize: Anonymize): Prom
   const doc = mupdf.PDFDocument.openDocument(new Uint8Array(buffer), "application/pdf");
   const mapped = mappedFromDoc(doc);
 
-  // Refuse a PDF with no usable text layer — OR one whose text layer is only PARTIAL (a mixed file with
-  // at least one image-only page, B3). A scanned/photographed page is an IMAGE our text detection is
-  // blind to, so redacting on the text path would leave that page burned-in while the verify (keyed on
-  // text detections) passes — a falsely-clean file. Fail closed; the OCR track (scanOcr on) reads scans.
-  if (mapped.text.replace(/\s/g, "").length < NO_TEXT_LAYER_MIN_CHARS || hasImageOnlyPage(doc)) {
+  // Refuse a PDF with NO usable text layer at all (a whole-document scan — there are no text pages to
+  // redact, so producing an all-unverified file is pointless; the OCR track handles it when scanOcr is
+  // on). But a MIXED file (has text pages AND >=1 image-only page) is NOT refused: we redact the text
+  // pages and PRODUCE the file, reporting the image-only pages we cannot see into (owner decision:
+  // produce + per-page warning). Those pages carry burned-in content our text detection is blind to, so
+  // the App warns per page rather than silently shipping a falsely-clean file.
+  if (mapped.text.replace(/\s/g, "").length < NO_TEXT_LAYER_MIN_CHARS) {
     throw new Error(NO_TEXT_LAYER);
   }
+  const unverifiedImagePages = imageOnlyPageNumbers(doc);
 
   // UNIFIED detection pass: the body's logical text PLUS every outline (bookmark) title go through ONE
   // anonymize call, so the same name is the SAME placeholder in the body and in a bookmark (and the
@@ -399,6 +403,11 @@ export async function redactPdf(buffer: ArrayBuffer, anonymize: Anonymize): Prom
   // already hard-verified. layerB/layerC (byte + structure) still ran inside selfVerify.
   const verify = await selfVerify(bytes, result.key.map((row) => row.original));
   const pdfUnverified = verify.ok ? undefined : { reason: verify.detail, terms: verify.terms };
-  return { bytes, result, ...(pdfUnverified ? { pdfUnverified } : {}) };
+  return {
+    bytes,
+    result,
+    ...(pdfUnverified ? { pdfUnverified } : {}),
+    ...(unverifiedImagePages.length > 0 ? { unverifiedImagePages } : {}),
+  };
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */

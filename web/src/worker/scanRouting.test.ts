@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 import { anonymizeDeterministic } from "@engine/pipeline";
 import type { OcrPageResult, OcrWord } from "@engine/ocrTypes";
 import { redactFile } from "./officeRedact";
-import { isScannedPdf } from "./pdfRedact";
+import { isScannedPdf, extractPdfMapped } from "./pdfRedact";
 import { collectOutlineItems } from "./pdfSanitize";
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- mupdf node surface is untyped */
@@ -94,6 +94,11 @@ const word = (text: string, confidence: number): OcrWord => ({ text, confidence,
 const ocrOf =
   (page: OcrPageResult) =>
   async (): Promise<OcrPageResult> => page;
+/** Return a different OCR result per page in order (call N -> pages[N]), for mixed produce+warn tests. */
+const ocrPerPage = (pages: OcrPageResult[]) => {
+  let call = 0;
+  return async (): Promise<OcrPageResult> => pages[Math.min(call++, pages.length - 1)];
+};
 const cleanNoPii: OcrPageResult = { words: [word("שלום", 90), word("עולם", 90)], meanConfidence: 90, imageWidth: 1000, imageHeight: 1400 };
 const lowConf: OcrPageResult = { words: [word("טשטוש", 40), word("רעש", 40)], meanConfidence: 40, imageWidth: 1000, imageHeight: 1400 };
 /* eslint-enable @typescript-eslint/no-explicit-any */
@@ -129,30 +134,49 @@ describe("scan routing (Stage 5, model-free)", () => {
   });
 });
 
-describe("mixed digital+scanned classification (B3 — per-page, not whole-document)", () => {
-  it("classifies a mixed PDF (one image-only page) as scan, not text", async () => {
-    // A whole-document 3-char threshold sees page 0's text and returns false → the text path would redact
-    // only page 0 and leave page 1's burned-in PII untouched with a blind verify. Per-page must catch it.
+describe("mixed digital+scanned PDF — produce + per-page warning (owner decision, B3)", () => {
+  // A mixed file has at least one real text page AND one or more image-only pages. It is NOT refused for
+  // containing image page(s): the text pages are redacted and the file is produced, with the image-only
+  // pages we could not verify clean returned in `unverifiedImagePages` (1-based) so the UI can warn.
+
+  it("classifies a mixed PDF (one image-only page) as scan (routes to OCR when the flag is on)", async () => {
     expect(await isScannedPdf(await buildMixedPdf())).toBe(true);
   });
 
-  it("refuses a mixed PDF on the text path (flag OFF) instead of shipping page 2 untouched", async () => {
-    // The B3 leak: with OCR off, the file must NOT come back as a normally-redacted "text" PDF whose
-    // image-only page is silently unredacted. Fail closed with NO_TEXT_LAYER.
+  it("text path (flag OFF): redacts the text page's PII, produces the file, flags the image page", async () => {
+    // page 0 = digital text carrying the fixture ID 123456709; page 1 = image-only. The text page is
+    // redacted and the file produced (no refusal); the unredacted image page is reported for a warning.
     const mixed = await buildMixedPdf();
-    await expect(
-      redactFile("mixed.pdf", mixed, anonymizeDeterministic, { scanOcr: false }),
-    ).rejects.toThrow("NO_TEXT_LAYER");
-  });
-
-  it("routes a mixed PDF through OCR when the flag is ON (every page rasterized + read)", async () => {
-    const mixed = await buildMixedPdf();
-    const { bytes } = await redactFile("mixed.pdf", mixed, anonymizeDeterministic, {
-      scanOcr: true,
-      ocr: ocrOf(cleanNoPii), // no PII → nothing redacted → bytes returned (both pages went through OCR)
+    const { bytes, result, unverifiedImagePages } = await redactFile("mixed.pdf", mixed, anonymizeDeterministic, {
+      scanOcr: false,
     });
     expect(bytes).toBeInstanceOf(Uint8Array);
-    expect(bytes && bytes.length).toBeGreaterThan(0);
+    expect(unverifiedImagePages).toEqual([2]); // 1-based; the image-only page
+    expect(result.key.some((row) => row.original === "123456709")).toBe(true); // the ID was detected+keyed
+    const outText = await extractPdfMapped((bytes as Uint8Array).slice().buffer);
+    expect(outText.text).not.toContain("123456709"); // page 0's ID is gone from the produced text layer
+  });
+
+  it("OCR path (flag ON): a readable page is redacted, a gate-failing image page is flagged (no refuse)", async () => {
+    // page 0 OCRs cleanly (redacted/verified), page 1 fails the quality gate → produce + list page 1, do
+    // NOT refuse the whole file (it is mixed, not an all-unverified pure scan).
+    const mixed = await buildMixedPdf();
+    const { bytes, unverifiedImagePages } = await redactFile("mixed.pdf", mixed, anonymizeDeterministic, {
+      scanOcr: true,
+      ocr: ocrPerPage([cleanNoPii, lowConf]),
+    });
+    expect(bytes).toBeInstanceOf(Uint8Array);
+    expect(unverifiedImagePages).toEqual([2]);
+  });
+
+  it("OCR path (flag ON): all pages readable → produced with no unverified pages", async () => {
+    const mixed = await buildMixedPdf();
+    const { bytes, unverifiedImagePages } = await redactFile("mixed.pdf", mixed, anonymizeDeterministic, {
+      scanOcr: true,
+      ocr: ocrOf(cleanNoPii),
+    });
+    expect(bytes).toBeInstanceOf(Uint8Array);
+    expect(unverifiedImagePages ?? []).toEqual([]);
   });
 });
 
