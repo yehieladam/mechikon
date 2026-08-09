@@ -73,9 +73,12 @@ async function deriveAesKey(
   salt: Uint8Array,
   iterations: number,
 ): Promise<CryptoKey> {
+  // NFC-normalize BEFORE encoding: the same visible passphrase can arrive precomposed (NFC) on one
+  // device and decomposed (NFD, e.g. macOS input) on another. Without this, the correct passphrase
+  // derives a DIFFERENT key on the other device — a permanent decrypt failure (data loss).
   const baseKey = await crypto.subtle.importKey(
     "raw",
-    new TextEncoder().encode(passphrase),
+    new TextEncoder().encode(passphrase.normalize("NFC")),
     "PBKDF2",
     false,
     ["deriveKey"],

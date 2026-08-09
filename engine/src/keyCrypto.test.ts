@@ -62,6 +62,28 @@ describe("keyCrypto", () => {
   });
 });
 
+describe("keyCrypto — passphrase Unicode normalization (NFC)", () => {
+  it("decrypts with the NFC form of a passphrase that was encrypted in NFD form (cross-device)", async () => {
+    // macOS-style input can produce the DECOMPOSED form (NFD) of the same visible passphrase another
+    // device types PRECOMPOSED (NFC). Both must derive the SAME key, or the correct passphrase fails
+    // permanently on the other device (data loss).
+    const nfd = "café שָׁלוֹם".normalize("NFD");
+    const nfc = nfd.normalize("NFC");
+    expect(nfd).not.toBe(nfc); // the two forms genuinely differ code-point-wise
+    const envelope = await encryptKeyRows(ROWS, nfd);
+    const restored = await decryptKeyRows(envelope, nfc);
+    expect(restored).toEqual(ROWS);
+  });
+
+  it("decrypts with the NFD form of a passphrase that was encrypted in NFC form", async () => {
+    const nfc = "café".normalize("NFC");
+    const nfd = nfc.normalize("NFD");
+    const envelope = await encryptKeyRows(ROWS, nfc);
+    const restored = await decryptKeyRows(envelope, nfd);
+    expect(restored).toEqual(ROWS);
+  });
+});
+
 describe("keyCrypto — untrusted-envelope hardening (M2)", () => {
   afterEach(() => {
     vi.restoreAllMocks();
