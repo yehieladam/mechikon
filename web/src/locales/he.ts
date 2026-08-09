@@ -242,6 +242,9 @@ export const he = {
   terms: {
     link: "תנאי שימוש",
   },
+  accessibility: {
+    link: "הצהרת נגישות",
+  },
   contact: {
     lawyersCta: "משרד עורכי דין שמעוניין להטמיע AI בצורה בטוחה?",
     link: "בואו נדבר",

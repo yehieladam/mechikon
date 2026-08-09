@@ -1024,7 +1024,6 @@ export function App() {
           href="https://www.bai-solutions.com/lawyers/suite"
           target="_blank"
           rel="noreferrer"
-          aria-label="BAI Solutions"
           className="inline-flex min-h-[44px] items-center rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/20"
         >
           <img src="/bai-logo.png" alt="BAI Solutions" className="h-[72px] w-auto object-contain" />
@@ -1040,7 +1039,7 @@ export function App() {
           // exfiltration alarm stays red. Links to the privacy section. The destination-verification
           // logic (unexpected host) and the model-loaded status are preserved exactly.
           const tone =
-            unexpected > 0 ? "text-red-600" : net.count === 0 ? "text-emerald-700" : "text-zinc-400";
+            unexpected > 0 ? "text-red-600" : net.count === 0 ? "text-emerald-700" : "text-zinc-500";
           return (
             <a
               href="#faq"
@@ -1061,10 +1060,10 @@ export function App() {
                       includes cache-served requests on reload and misreads as a re-download (it is not —
                       the model is fetched once and served from the browser cache thereafter). */}
                   {ner.status === "ready" ? (
-                    <span className="text-zinc-300"> · {t("trust.badge.modelLoaded")}</span>
+                    <span className="text-zinc-500"> · {t("trust.badge.modelLoaded")}</span>
                   ) : (
                     ner.modelRequests > 0 && (
-                      <span className="text-zinc-300"> · {t("trust.badge.model", { count: ner.modelRequests })}</span>
+                      <span className="text-zinc-500"> · {t("trust.badge.model", { count: ner.modelRequests })}</span>
                     )
                   )}
                 </span>
@@ -1078,13 +1077,13 @@ export function App() {
         <section className="pt-12 text-center sm:pt-16">
           <img
             src="/logo.png"
-            alt="Mechikon"
+            alt=""
             className="mx-auto h-24 w-24 object-contain sm:h-28 sm:w-28"
             onError={(event) => {
               event.currentTarget.style.display = "none";
             }}
           />
-          <div className="mt-3 text-xl font-semibold tracking-tight text-ink" dir="ltr">
+          <div className="mt-3 text-xl font-semibold tracking-tight text-ink" dir="ltr" lang="en">
             Mechikon
           </div>
           <h1 className="mt-6 text-4xl font-semibold leading-[1.1] tracking-tight sm:text-[3.25rem]">
@@ -1133,7 +1132,7 @@ export function App() {
                 {t("input.modeManual")}
               </button>
             </div>
-            {manualOnly && <p className="px-1 text-xs text-zinc-400">{t("input.modeManualHint")}</p>}
+            {manualOnly && <p className="px-1 text-xs text-zinc-500">{t("input.modeManualHint")}</p>}
           </div>
           <div
             onDragOver={(event) => {
@@ -1158,7 +1157,8 @@ export function App() {
               spellCheck={false}
               value={input}
               onChange={(event) => setInput(event.target.value)}
-              className="min-h-[168px] w-full resize-none rounded-2xl bg-transparent p-4 text-[17px] leading-relaxed outline-none placeholder:text-zinc-400"
+              aria-label={t("input.paste.placeholder")}
+              className="min-h-[168px] w-full resize-none rounded-2xl bg-transparent p-4 text-[17px] leading-relaxed outline-none focus-visible:ring-2 focus-visible:ring-ink/20 placeholder:text-zinc-500"
               placeholder={t("input.paste.placeholder")}
             />
             <div className="flex flex-wrap items-center justify-between gap-3 px-2 pb-1">
@@ -1195,7 +1195,7 @@ export function App() {
             </div>
           </div>
           {input.length === 0 && !result && (
-            <p className="mt-2 px-2 text-xs text-zinc-400">{t("input.dropHint")}</p>
+            <p className="mt-2 px-2 text-xs text-zinc-500">{t("input.dropHint")}</p>
           )}
           {looksReturnedFromAi && (
             <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 px-2 text-[13px] text-zinc-500">
@@ -1214,7 +1214,11 @@ export function App() {
               </button>
             </div>
           )}
-          <p className={`mt-1 px-2 text-xs ${fileError ? "text-amber-600" : "text-zinc-400"}`}>
+          <p
+            className={`mt-1 px-2 text-xs ${fileError ? "text-amber-700" : "text-zinc-500"}`}
+            role="status"
+            aria-live="polite"
+          >
             {statusLine}
           </p>
           {scannedNotice && (
@@ -1312,7 +1316,7 @@ export function App() {
             <div className="mt-3 rounded-2xl border border-hairline bg-surface px-4 py-3" aria-live="polite">
               <div className="flex items-center justify-between gap-3 text-xs text-zinc-600">
                 <span>{t(ner.cachedBefore ? "ner.loadingCached" : "ner.loading")}</span>
-                <span className="tabular-nums text-zinc-400">{ner.progress}%</span>
+                <span className="tabular-nums text-zinc-500">{ner.progress}%</span>
               </div>
               <div className="mt-2 h-1 overflow-hidden rounded-full bg-hairline">
                 <div
@@ -1323,7 +1327,7 @@ export function App() {
             </div>
           )}
           {ner.status === "error" && (
-            <p className="mt-3 px-2 text-xs text-amber-600">{t("ner.error")}</p>
+            <p className="mt-3 px-2 text-xs text-amber-700" role="alert">{t("ner.error")}</p>
           )}
         </section>
 
@@ -1331,7 +1335,7 @@ export function App() {
           <section className="mt-8 animate-[fadeIn_200ms_ease-out]">
             <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-sm font-medium text-ink">
+                <span className="text-sm font-medium text-ink" role="status" aria-live="polite">
                   {result.key.length > 0
                     ? t("result.found", { count: result.key.length })
                     : manualOnly
@@ -1344,7 +1348,7 @@ export function App() {
                     className="inline-flex items-center gap-1 rounded-full bg-surface px-2.5 py-1 text-xs text-zinc-600"
                   >
                     {t(TYPE_LABEL[type])}
-                    <span className="tabular-nums text-zinc-400">{count}</span>
+                    <span className="tabular-nums text-zinc-600">{count}</span>
                   </span>
                 ))}
                 <button
@@ -1379,7 +1383,7 @@ export function App() {
                   }
                   if (gate === "pending") {
                     return (
-                      <span className="inline-flex min-h-[44px] items-center gap-1.5 rounded-full border border-hairline px-4 text-[13px] font-medium text-zinc-400">
+                      <span className="inline-flex min-h-[44px] items-center gap-1.5 rounded-full border border-hairline px-4 text-[13px] font-medium text-zinc-500">
                         {t("result.downloadPending")}
                       </span>
                     );
@@ -1452,7 +1456,8 @@ export function App() {
                           }
                         }}
                         placeholder={t("manual.placeholder")}
-                        className="min-h-[44px] w-full rounded-xl border border-hairline bg-white px-3 text-[16px] outline-none focus-visible:ring-2 focus-visible:ring-ink/20 placeholder:text-zinc-400 sm:w-auto sm:flex-1"
+                        aria-label={t("manual.placeholder")}
+                        className="min-h-[44px] w-full rounded-xl border border-hairline bg-white px-3 text-[16px] outline-none focus-visible:ring-2 focus-visible:ring-ink/20 placeholder:text-zinc-500 sm:w-auto sm:flex-1"
                       />
                       <input
                         dir="ltr"
@@ -1469,8 +1474,9 @@ export function App() {
                           }
                         }}
                         placeholder={t("manual.labelPlaceholder")}
+                        aria-label={t("manual.labelPlaceholder")}
                         maxLength={20}
-                        className="min-h-[44px] w-28 rounded-xl border border-hairline bg-white px-3 text-[16px] uppercase outline-none focus-visible:ring-2 focus-visible:ring-ink/20 placeholder:normal-case placeholder:text-zinc-400"
+                        className="min-h-[44px] w-28 rounded-xl border border-hairline bg-white px-3 text-[16px] uppercase outline-none focus-visible:ring-2 focus-visible:ring-ink/20 placeholder:normal-case placeholder:text-zinc-500"
                       />
                       <button
                         type="button"
@@ -1481,7 +1487,7 @@ export function App() {
                         {t("manual.submit")}
                       </button>
                     </div>
-                    <p className="px-1 text-[11px] text-zinc-400">{t("manual.labelHint")}</p>
+                    <p className="px-1 text-[11px] text-zinc-500">{t("manual.labelHint")}</p>
                   </div>
                 )}
                 {manualTerms.length > 0 && (
@@ -1496,7 +1502,7 @@ export function App() {
                           type="button"
                           onClick={() => onRemoveManual(mt.value)}
                           aria-label={t("manual.remove")}
-                          className="-me-2 inline-flex min-h-[44px] min-w-[44px] items-center justify-center text-zinc-400 transition hover:text-ink"
+                          className="-me-2 inline-flex min-h-[44px] min-w-[44px] items-center justify-center text-zinc-500 transition hover:text-ink"
                         >
                           ✕
                         </button>
@@ -1617,7 +1623,7 @@ export function App() {
                 )}
               </div>
             </div>
-            {copyError && <p className="mt-2 px-2 text-xs text-amber-600">{t("result.copyFailed")}</p>}
+            {copyError && <p className="mt-2 px-2 text-xs text-amber-700" role="alert">{t("result.copyFailed")}</p>}
             {manualOnly ? (
               <p className="mt-3 rounded-xl bg-amber-50/60 px-3 py-2 text-xs leading-relaxed text-zinc-600">
                 {t("result.noteManual")}
@@ -1669,7 +1675,7 @@ export function App() {
                   // State A: guidance. One amber-weight irreversibility sentence, the rest zinc. When the
                   // key CHANGED after a prior download (G4), show only the quiet delta, not the full wall.
                   <div className="flex items-start gap-3">
-                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-600">
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-700">
                       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                         <circle cx="8" cy="8" r="4" stroke="currentColor" strokeWidth="1.7" />
                         <path
@@ -1689,10 +1695,10 @@ export function App() {
                         </p>
                       ) : (
                         <>
-                          <p className="mt-1 text-xs leading-relaxed text-zinc-500">
+                          <p className="mt-1 text-xs leading-relaxed text-zinc-600">
                             {t("key.meaningless")}
                           </p>
-                          <p className="mt-1 text-xs leading-relaxed text-zinc-500">
+                          <p className="mt-1 text-xs leading-relaxed text-zinc-600">
                             {t("key.sessionActive")}
                           </p>
                           <p className="mt-1 text-xs font-medium leading-relaxed text-amber-800">
@@ -1701,7 +1707,7 @@ export function App() {
                         </>
                       )}
                       {ner.status === "loading" && (
-                        <p className="mt-1 text-xs leading-relaxed text-zinc-500">{t("key.notFinal")}</p>
+                        <p className="mt-1 text-xs leading-relaxed text-zinc-600">{t("key.notFinal")}</p>
                       )}
                     </div>
                   </div>
@@ -1733,13 +1739,14 @@ export function App() {
                         }
                       }}
                       placeholder={t("key.passphrase")}
-                      className="min-h-[44px] w-full rounded-xl border border-hairline bg-white px-3 py-2 pe-12 text-[16px] outline-none focus-visible:ring-2 focus-visible:ring-ink/20 placeholder:text-zinc-400"
+                      aria-label={t("key.passphrase")}
+                      className="min-h-[44px] w-full rounded-xl border border-hairline bg-white px-3 py-2 pe-12 text-[16px] outline-none focus-visible:ring-2 focus-visible:ring-ink/20 placeholder:text-zinc-500"
                     />
                     <button
                       type="button"
                       onClick={() => setShowPass((v) => !v)}
                       aria-label={t(showPass ? "key.hidePass" : "key.showPass")}
-                      className="absolute inset-y-0 end-0 inline-flex min-h-[44px] min-w-[44px] items-center justify-center text-zinc-400 transition hover:text-ink"
+                      className="absolute inset-y-0 end-0 inline-flex min-h-[44px] min-w-[44px] items-center justify-center text-zinc-500 transition hover:text-ink"
                     >
                       {showPass ? (
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -1764,7 +1771,7 @@ export function App() {
                   </div>
                 )}
                 {passphraseMissing && (
-                  <p className="mt-1 text-xs text-amber-600">{t("key.passphraseHint")}</p>
+                  <p className="mt-1 text-xs text-amber-700">{t("key.passphraseHint")}</p>
                 )}
                 <button
                   type="button"
@@ -1787,11 +1794,11 @@ export function App() {
                     <button
                       type="button"
                       onClick={() => void onDownloadKey(true)}
-                      className="text-xs text-zinc-500 underline decoration-zinc-300 underline-offset-2 transition hover:text-ink"
+                      className="text-xs text-zinc-600 underline decoration-zinc-300 underline-offset-2 transition hover:text-ink"
                     >
                       {t("key.downloadPlain")}
                     </button>
-                    <p className="mt-1 text-[11px] leading-relaxed text-zinc-500">
+                    <p className="mt-1 text-[11px] leading-relaxed text-zinc-600">
                       {t("key.plainWarning")}
                     </p>
                   </div>
@@ -1809,7 +1816,7 @@ export function App() {
           >
             <summary className="flex cursor-pointer list-none items-center justify-between p-5 text-sm font-medium text-ink">
               {t("restore.title")}
-              <span className="text-zinc-300 transition group-open:rotate-180" aria-hidden="true">
+              <span className="text-zinc-500 transition group-open:rotate-180" aria-hidden="true">
                 ⌄
               </span>
             </summary>
@@ -1871,7 +1878,8 @@ export function App() {
                     value={unlockPassphrase}
                     onChange={(event) => setUnlockPassphrase(event.target.value)}
                     placeholder={t("key.passphrase")}
-                    className="min-w-[200px] flex-1 rounded-xl border border-hairline bg-surface px-3 py-2 text-[16px] outline-none focus-visible:ring-2 focus-visible:ring-ink/20 placeholder:text-zinc-400"
+                    aria-label={t("key.passphrase")}
+                    className="min-w-[200px] flex-1 rounded-xl border border-hairline bg-surface px-3 py-2 text-[16px] outline-none focus-visible:ring-2 focus-visible:ring-ink/20 placeholder:text-zinc-500"
                   />
                   <button
                     type="button"
@@ -1883,18 +1891,23 @@ export function App() {
                 </div>
               )}
               {keyError && (
-                <p className="mt-2 text-xs text-amber-600">
+                <p className="mt-2 text-xs text-amber-700" role="alert">
                   {keyError === "wrong" ? t("key.wrongPassphrase") : t("key.invalid")}
                 </p>
               )}
 
               {/* Step 2 — what to restore: one segmented control, only one path shown at a time. */}
-              <div className="mt-4 inline-flex rounded-full border border-hairline p-0.5">
+              <div
+                className="mt-4 inline-flex rounded-full border border-hairline p-0.5"
+                role="group"
+                aria-label={t("restore.title")}
+              >
                 {(["text", "file"] as const).map((mode) => (
                   <button
                     key={mode}
                     type="button"
                     onClick={() => setRestoreMode(mode)}
+                    aria-pressed={restoreMode === mode}
                     className={`min-h-[44px] rounded-full px-4 text-[13px] font-medium transition ${
                       restoreMode === mode ? "bg-ink text-white" : "text-zinc-600 hover:text-ink"
                     }`}
@@ -1913,7 +1926,8 @@ export function App() {
                     spellCheck={false}
                     value={restoreInput}
                     onChange={(event) => setRestoreInput(event.target.value)}
-                    className="mt-3 min-h-[120px] w-full resize-none rounded-2xl border border-hairline bg-surface p-4 text-[16px] leading-relaxed outline-none focus-visible:ring-2 focus-visible:ring-ink/20 placeholder:text-zinc-400"
+                    aria-label={t("restore.placeholder")}
+                    className="mt-3 min-h-[120px] w-full resize-none rounded-2xl border border-hairline bg-surface p-4 text-[16px] leading-relaxed outline-none focus-visible:ring-2 focus-visible:ring-ink/20 placeholder:text-zinc-500"
                     placeholder={t("restore.placeholder")}
                   />
                   <button
@@ -1927,7 +1941,7 @@ export function App() {
 
                   {/* Step 3 — output (M2 climax). */}
                   {restoreResult && (
-                    <div className="mt-4">
+                    <div className="mt-4" role="status" aria-live="polite">
                       {restoredCount > 0 && (
                         <p className="mb-2 inline-flex items-center gap-1.5 text-[13px] font-medium text-emerald-800">
                           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -1985,10 +1999,10 @@ export function App() {
                         </div>
                       </div>
                       {restoredCopyError && (
-                        <p className="mt-2 text-xs text-amber-600">{t("result.copyFailed")}</p>
+                        <p className="mt-2 text-xs text-amber-700">{t("result.copyFailed")}</p>
                       )}
                       {restoreResult.unmatched.length > 0 && (
-                        <p className="mt-2 text-xs text-amber-600">
+                        <p className="mt-2 text-xs text-amber-700">
                           {t("restore.unmatched", { count: restoreResult.unmatched.length })}
                         </p>
                       )}
@@ -2025,7 +2039,7 @@ export function App() {
                     </p>
                   )}
                   {restoreFileError && (
-                    <p className="mt-2 text-xs text-amber-600">
+                    <p className="mt-2 text-xs text-amber-700" role="alert">
                       {restoreFileError === "nokey"
                         ? t("restoreFile.noKey")
                         : restoreFileError === "unsupported"
@@ -2036,7 +2050,7 @@ export function App() {
                     </p>
                   )}
                   {restoreUnmatched > 0 && (
-                    <p className="mt-2 text-xs text-amber-600">
+                    <p className="mt-2 text-xs text-amber-700">
                       {t("restore.unmatched", { count: restoreUnmatched })}
                     </p>
                   )}
@@ -2057,7 +2071,7 @@ export function App() {
                 <summary className="flex min-h-[44px] cursor-pointer list-none items-center justify-between gap-3 py-4 text-[15px] font-semibold leading-snug marker:hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/20">
                   <span>{t(`faq.${key}.q`)}</span>
                   <svg
-                    className="h-4 w-4 shrink-0 text-zinc-400 transition-transform group-open:rotate-180"
+                    className="h-4 w-4 shrink-0 text-zinc-500 transition-transform group-open:rotate-180"
                     viewBox="0 0 24 24"
                     fill="none"
                     aria-hidden="true"
@@ -2072,7 +2086,7 @@ export function App() {
         </section>
       </main>
 
-      <footer className="mx-auto mt-24 max-w-2xl px-6 pb-16 text-center text-xs leading-relaxed text-zinc-400">
+      <footer className="mx-auto mt-24 max-w-2xl px-6 pb-16 text-center text-xs leading-relaxed text-zinc-500">
         <p className="text-sm text-zinc-600">
           {t("contact.lawyersCta")}{" "}
           <a
@@ -2088,12 +2102,18 @@ export function App() {
         <p className="mx-auto mt-3 max-w-xl">{t("legal.notAdvice")}</p>
         <p className="mx-auto mt-3 max-w-xl">{t("legal.asIs")}</p>
         <p className="mt-4">{t("legal.brand")}</p>
-        <p className="mt-2">
+        <p className="mt-2 flex flex-wrap justify-center gap-x-4 gap-y-1">
           <a
             href="/terms.html"
-            className="text-ink underline decoration-zinc-300 underline-offset-4 transition hover:decoration-ink"
+            className="inline-flex min-h-[44px] items-center text-ink underline decoration-zinc-300 underline-offset-4 transition hover:decoration-ink"
           >
             {t("terms.link")}
+          </a>
+          <a
+            href="/accessibility.html"
+            className="inline-flex min-h-[44px] items-center text-ink underline decoration-zinc-300 underline-offset-4 transition hover:decoration-ink"
+          >
+            {t("accessibility.link")}
           </a>
         </p>
       </footer>
