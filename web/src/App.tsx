@@ -2121,7 +2121,7 @@ export function App() {
                     <path d="M6 9l6 6 6-6" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
                   </svg>
                 </summary>
-                <p className="pb-5 text-[13px] leading-relaxed text-zinc-600">{t(`faq.${key}.a`)}</p>
+                <p className="whitespace-pre-line pb-5 text-[13px] leading-relaxed text-zinc-600">{t(`faq.${key}.a`)}</p>
               </details>
             ))}
           </div>
