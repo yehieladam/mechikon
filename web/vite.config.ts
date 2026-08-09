@@ -59,6 +59,10 @@ function isolationHeaders(withCsp: boolean) {
   return (_req: IncomingMessage, res: ServerResponse, next: () => void): void => {
     res.setHeader("Cross-Origin-Opener-Policy", COOP);
     res.setHeader("Cross-Origin-Embedder-Policy", COEP);
+    // Defense in depth, mirrored in vercel.json: no MIME sniffing, and never leak the page URL in a
+    // Referer header (belt to the connect-src suspenders — even allowed hosts learn nothing).
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Referrer-Policy", "no-referrer");
     if (withCsp) {
       res.setHeader("Content-Security-Policy", CSP);
     }

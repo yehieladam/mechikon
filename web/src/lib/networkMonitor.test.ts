@@ -154,3 +154,22 @@ describe("CSP governs WebRTC in both prod and preview (kept in sync)", () => {
     expect(raw).toContain(`"webrtc 'block'"`);
   });
 });
+
+describe("defense-in-depth headers ship in prod and preview (kept in sync)", () => {
+  const repoRoot = fileURLToPath(new NodeURL("../../..", import.meta.url));
+
+  it("vercel.json sets nosniff + no-referrer", () => {
+    const parsed = JSON.parse(readFileSync(`${repoRoot}/vercel.json`, "utf8")) as {
+      headers: { headers: { key: string; value: string }[] }[];
+    };
+    const byKey = new Map(parsed.headers[0].headers.map((h) => [h.key, h.value]));
+    expect(byKey.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(byKey.get("Referrer-Policy")).toBe("no-referrer");
+  });
+
+  it("web/vite.config.ts sets the same headers for e2e parity", () => {
+    const raw = readFileSync(`${repoRoot}/web/vite.config.ts`, "utf8");
+    expect(raw).toContain('"X-Content-Type-Options", "nosniff"');
+    expect(raw).toContain('"Referrer-Policy", "no-referrer"');
+  });
+});
