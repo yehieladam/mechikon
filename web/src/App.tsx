@@ -32,8 +32,6 @@ type Source =
   | { readonly kind: "text"; readonly text: string }
   | { readonly kind: "file"; readonly name: string; readonly buffer: ArrayBuffer; readonly scan?: boolean };
 
-/** AGPL-3.0 §13: users interacting over a network must be offered the corresponding source. */
-const SOURCE_URL = "https://github.com/yehieladam/mechikon-source";
 const COPIED_RESET_MS = 1500;
 const COPY_TOAST_MS = 2000;
 /** How long the transient "N names added" notice (M4) stays before it fades out. */
@@ -2089,17 +2087,7 @@ export function App() {
         <p className="mt-6 text-zinc-500">{t("trust.tagline")}</p>
         <p className="mx-auto mt-3 max-w-xl">{t("legal.notAdvice")}</p>
         <p className="mx-auto mt-3 max-w-xl">{t("legal.asIs")}</p>
-        <p className="mt-4">
-          {t("legal.brand")}{" "}
-          <a
-            href={SOURCE_URL}
-            target="_blank"
-            rel="noreferrer"
-            className="text-ink underline decoration-zinc-300 underline-offset-4 transition hover:decoration-ink"
-          >
-            {t("legal.sourceLink")}
-          </a>
-        </p>
+        <p className="mt-4">{t("legal.brand")}</p>
         <p className="mt-2">
           <a
             href="/terms.html"
