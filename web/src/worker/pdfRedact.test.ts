@@ -246,6 +246,17 @@ describe("redactPdf — pdfUnverified soft warning is HIGH-CONFIDENCE only (B2)"
     expect(pdfUnverified!.terms).toContain("Israel Israeli");
   });
 
+  it("WARNS on a SINGLE-TOKEN surname that survives in the re-extracted text (layer A provenance)", async () => {
+    // A single-token PERSON the redaction quads missed: it stays whole in the page text, so layer A
+    // (whole-word) flags it. Layer A hits are verified survivors, never fragment noise — the warning
+    // must fire even though the surname is a single token (the HIGH under-warn the review caught).
+    const buf = await latinPdf("signed by Abramovich in court");
+    const { bytes, pdfUnverified } = await redactPdf(buf, claimRedacted("Abramovich", "PERSON", "[NAME_1]"));
+    expect(bytes.length).toBeGreaterThan(0);
+    expect(pdfUnverified).toBeDefined();
+    expect(pdfUnverified!.terms).toContain("Abramovich");
+  });
+
   it("does NOT warn when a short name fragment only substring-matches inside another word (no noise)", async () => {
     // "Dan" was (per the key) redacted; the page text only contains "Danube", whose raw bytes
     // substring-match "Dan" in layer B. That is the #90 false positive — it must NOT resurface.

@@ -125,35 +125,46 @@ const STRUCTURED_TYPES: ReadonlySet<EntityType> = new Set<EntityType>([
   "IL_NUMBER",
 ]);
 
+/** A layer-B-only (raw-byte substring) hit is high-confidence iff it is a full-value survival: a
+ * structured value (or any digits-only surface), or a full multi-token name surface. */
+function isHighConfidenceByteHit(row: Pick<KeyRow, "original" | "type">): boolean {
+  const isStructured = STRUCTURED_TYPES.has(row.type) || /^\d+$/.test(normalizeForLeak(row.original));
+  const isFullMultiToken = stripControls(row.original).trim().split(/\s+/).filter(Boolean).length >= 2;
+  return isStructured || isFullMultiToken;
+}
+
 /**
- * B2 soft-warn filter — which surviving needles are worth WARNING the user about. Owner decision
- * (PR #90 context): a naive pdfUnverified warning fired on short name fragments whose bytes merely
- * substring-matched inside unrelated words (layer B is a raw-byte substring scan by design — it must
- * stay paranoid). The user-facing warning therefore surfaces only HIGH-CONFIDENCE FULL-VALUE
- * survivals:
- *  - a STRUCTURED value (ID/phone/company/IBAN/email/case/land/policy/insured — or any digits-only
- *    surface, e.g. a numeric MANUAL term): the complete identifier surviving is always meaningful;
- *  - a FULL MULTI-TOKEN name surface (PERSON/ORG/LOCATION/manual text) — every hit is computed on the
- *    complete surface, so a hit on "ישראל ישראלי" means the whole name survived, not a fragment.
- * A single-token name fragment ("דן", "Dan") is dropped: it cannot be told apart from a coincidental
- * substring of a longer legit word, and that noise is exactly what got the warning removed in #90.
- * Pure; `hitTerms` are the needles layer A / layer B actually flagged.
+ * B2 soft-warn filter — which surviving needles are worth WARNING the user about, PROVENANCE-AWARE.
+ * Owner decision (PR #90 context): a naive warning fired on short name fragments whose bytes merely
+ * substring-matched inside unrelated words. But that noise is specific to layer B (a raw-byte
+ * SUBSTRING scan — it must stay paranoid). Layer A hits come from textLeaks, which is ALREADY
+ * whole-word for names and digit-bounded for numerics, so a layer A hit is a verified full-value
+ * survival, never fragment noise. Therefore:
+ *  - `layerAHits` (verified) → warned UNCONDITIONALLY, whatever the shape (a single-token surname
+ *    that survived whole in the re-extracted text is a real leak, not noise);
+ *  - `layerBHits` (raw-byte substring) → warned only when high-confidence: a STRUCTURED value
+ *    (ID/phone/company/IBAN/email/case/land/policy/insured, or any digits-only surface, e.g. a
+ *    numeric MANUAL term), or a FULL MULTI-TOKEN name surface. A layer-B-only single-token fragment
+ *    ("דן", "Dan") is dropped — exactly the #90 noise.
+ * Pure. Returns rows' original surfaces (deduped, reading order), only for values that actually hit.
  */
 export function highConfidenceSurvivors(
   rows: readonly Pick<KeyRow, "original" | "type">[],
-  hitTerms: readonly string[],
+  layerAHits: readonly string[],
+  layerBHits: readonly string[],
 ): string[] {
-  const hits = new Set(hitTerms);
+  const inA = new Set(layerAHits);
+  const inB = new Set(layerBHits);
   const seen = new Set<string>();
   const survivors: string[] = [];
   for (const row of rows) {
-    if (!hits.has(row.original) || seen.has(row.original)) {
+    if (seen.has(row.original)) {
       continue;
     }
-    seen.add(row.original);
-    const isStructured = STRUCTURED_TYPES.has(row.type) || /^\d+$/.test(normalizeForLeak(row.original));
-    const isFullMultiToken = stripControls(row.original).trim().split(/\s+/).filter(Boolean).length >= 2;
-    if (isStructured || isFullMultiToken) {
+    // Layer A is verified (whole-word/digit-bounded) → always warn. Layer-B-only hits are shape-filtered.
+    const warn = inA.has(row.original) || (inB.has(row.original) && isHighConfidenceByteHit(row));
+    if (warn) {
+      seen.add(row.original);
       survivors.push(row.original);
     }
   }

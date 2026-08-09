@@ -221,11 +221,13 @@ async function selfVerify(bytes: Uint8Array, rows: readonly KeyRow[]): Promise<V
   // Layers B + C — raw-byte scan (incl. inflated streams) and structure check.
   const b = await layerB(bytes, needles);
   const c = layerC(bytes);
-  // Warn only on HIGH-CONFIDENCE FULL-VALUE survivals (type-aware; see highConfidenceSurvivors). A
-  // layer-C-only anomaly without any surviving value is not a PII-survival signal — layer B already
-  // scanned every generation's bytes for every value — and SAFE_SAVE_OPTIONS pins layer C in tests.
-  const candidates = [...new Set([...layerAHits, ...b.hits.map((h) => h.split(" [")[0])])];
-  const terms = highConfidenceSurvivors(rows, candidates);
+  // Warn PROVENANCE-AWARE (see highConfidenceSurvivors): every layer A hit (whole-word/digit-bounded
+  // verified) warns unconditionally; layer-B-only raw-byte hits are shape-filtered so a short-fragment
+  // substring match cannot resurface as noise. A layer-C-only anomaly without any surviving value is
+  // not a PII-survival signal (layer B already scanned every generation's bytes for every value; and
+  // SAFE_SAVE_OPTIONS pins layer C in tests), so it does not warn on its own.
+  const layerBHits = b.hits.map((h) => h.split(" [")[0]);
+  const terms = highConfidenceSurvivors(rows, layerAHits, layerBHits);
   const detail = `layerA/meta=${layerAHits.join(",") || "ok"} layerB=${b.hits.join(",") || "ok"} layerC=eof:${c.eofCount}/sx:${c.startxrefCount}`;
   return { terms, detail };
 }

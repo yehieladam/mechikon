@@ -85,39 +85,60 @@ describe("layerB", () => {
   });
 });
 
-describe("highConfidenceSurvivors — B2 soft-warn filter (full-value survivals only, no fragment noise)", () => {
-  // Owner decision (#90 context): the pdfUnverified warning was removed because layer B's raw-byte
-  // SUBSTRING scan fired on short name fragments inside unrelated words. The warning comes back only
-  // for HIGH-CONFIDENCE survivors: structured values, or a full multi-token name surface.
-  it("keeps a structured value (ID) that hit — a full identifier surviving is always a real signal", async () => {
+describe("highConfidenceSurvivors — B2 soft-warn filter (provenance-aware: layer A always, layer B shape-filtered)", () => {
+  // Layer A hits come from textLeaks: whole-word for names, digit-bounded for numerics. They are
+  // ALREADY verified survivals, never fragment noise — so ANY layer A hit is warned, regardless of
+  // shape. Layer B hits are raw-byte SUBSTRING matches (must stay paranoid), so a layer-B-ONLY hit is
+  // warned only when it is a full-value survival: a structured value, or a full multi-token name.
+  it("warns on a SINGLE-TOKEN PERSON that survived in layer A (whole-word verified, not a fragment)", async () => {
     const { highConfidenceSurvivors } = await import("./pdfVerify");
-    const rows = [{ original: "123456709", type: "ISRAELI_ID" as const }];
-    expect(highConfidenceSurvivors(rows, ["123456709"])).toEqual(["123456709"]);
+    const rows = [{ original: "אברמוביץ", type: "PERSON" as const }];
+    // Layer A whole-word matched the surname in the re-extracted text — a real survivor. Even though
+    // it is a single token, provenance (layer A) makes it high-confidence, so it MUST be warned.
+    expect(highConfidenceSurvivors(rows, ["אברמוביץ"], [])).toEqual(["אברמוביץ"]);
   });
 
-  it("drops a single short PERSON fragment that only substring-matched (the #90 noise)", async () => {
+  it("warns on a single-token ORG survivor from layer A", async () => {
+    const { highConfidenceSurvivors } = await import("./pdfVerify");
+    const rows = [{ original: "Acme", type: "ORGANIZATION" as const }];
+    expect(highConfidenceSurvivors(rows, ["Acme"], [])).toEqual(["Acme"]);
+  });
+
+  it("drops a single short PERSON fragment that only substring-matched in LAYER B (the #90 noise)", async () => {
     const { highConfidenceSurvivors } = await import("./pdfVerify");
     const rows = [{ original: "דן", type: "PERSON" as const }];
-    // layer B substring-matched "דן" inside "ירדן" — NOT a whole-value survival, never warned.
-    expect(highConfidenceSurvivors(rows, ["דן"])).toEqual([]);
+    // layer-B-only substring match of "דן" inside "ירדן" — NOT a whole-value survival, never warned.
+    expect(highConfidenceSurvivors(rows, [], ["דן"])).toEqual([]);
   });
 
-  it("keeps a full multi-token PERSON whose complete surface survived", async () => {
+  it("keeps a structured value (ID) that hit in layer B — a full identifier surviving is always a signal", async () => {
+    const { highConfidenceSurvivors } = await import("./pdfVerify");
+    const rows = [{ original: "123456709", type: "ISRAELI_ID" as const }];
+    expect(highConfidenceSurvivors(rows, [], ["123456709"])).toEqual(["123456709"]);
+  });
+
+  it("keeps a full multi-token PERSON whose complete surface survived (layer B)", async () => {
     const { highConfidenceSurvivors } = await import("./pdfVerify");
     const rows = [{ original: "ישראל ישראלי", type: "PERSON" as const }];
-    expect(highConfidenceSurvivors(rows, ["ישראל ישראלי"])).toEqual(["ישראל ישראלי"]);
+    expect(highConfidenceSurvivors(rows, [], ["ישראל ישראלי"])).toEqual(["ישראל ישראלי"]);
   });
 
   it("treats a digits-only MANUAL term as structured (digit-bounded hits are meaningful)", async () => {
     const { highConfidenceSurvivors } = await import("./pdfVerify");
     const rows = [{ original: "987654321", type: "MANUAL" as const }];
-    expect(highConfidenceSurvivors(rows, ["987654321"])).toEqual(["987654321"]);
+    expect(highConfidenceSurvivors(rows, [], ["987654321"])).toEqual(["987654321"]);
   });
 
-  it("drops a single-token MANUAL word (same fragment-noise class as a short name)", async () => {
+  it("drops a single-token MANUAL word seen only in layer B (fragment-noise class)", async () => {
     const { highConfidenceSurvivors } = await import("./pdfVerify");
     const rows = [{ original: "Dan", type: "MANUAL" as const }];
-    expect(highConfidenceSurvivors(rows, ["Dan"])).toEqual([]);
+    expect(highConfidenceSurvivors(rows, [], ["Dan"])).toEqual([]);
+  });
+
+  it("does not duplicate a value flagged by BOTH layers", async () => {
+    const { highConfidenceSurvivors } = await import("./pdfVerify");
+    const rows = [{ original: "אברמוביץ", type: "PERSON" as const }];
+    expect(highConfidenceSurvivors(rows, ["אברמוביץ"], ["אברמוביץ"])).toEqual(["אברמוביץ"]);
   });
 
   it("only surfaces rows that actually hit", async () => {
@@ -126,6 +147,6 @@ describe("highConfidenceSurvivors — B2 soft-warn filter (full-value survivals 
       { original: "123456709", type: "ISRAELI_ID" as const },
       { original: "052-1234567", type: "IL_PHONE" as const },
     ];
-    expect(highConfidenceSurvivors(rows, ["052-1234567"])).toEqual(["052-1234567"]);
+    expect(highConfidenceSurvivors(rows, [], ["052-1234567"])).toEqual(["052-1234567"]);
   });
 });
