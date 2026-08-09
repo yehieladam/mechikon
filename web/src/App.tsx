@@ -18,6 +18,7 @@ import { mimeFor } from "./lib/mime";
 import { exceedsKeyFileLimit, exceedsUploadLimit } from "./lib/uploadLimits";
 import { isScanOcrEnabled } from "./lib/scanFlag";
 import { scanNoticeFor } from "./lib/scanNotice";
+import { selectActiveKey, uploadedKeyStateAfterResult } from "./lib/restoreKey";
 import { loadNer, useNer } from "./worker/nerController";
 
 /** Progress of the slow scanned-PDF OCR op (Stage 5). "model" = the one-time NER load precedes OCR. */
@@ -357,6 +358,17 @@ export function App() {
     // document keeps keyEverDownloaded, so it shows the quiet "key changed" delta (G4).
     if (isNewDocument) {
       setKeyEverDownloaded(false);
+      // H-stalekey: a brand-new document owns its OWN restore key. Drop any key uploaded (or being
+      // unlocked) for a PRIOR document, otherwise activeKey would keep pointing at the old key and
+      // restore this document's tokens against the wrong rows (writing the old originals in, silently).
+      const keyState = uploadedKeyStateAfterResult(
+        { uploadedKey: null, pendingEnc: null, unlockPassphrase: "" },
+        true,
+      );
+      setUploadedKey(keyState.uploadedKey);
+      setPendingEnc(keyState.pendingEnc);
+      setUnlockPassphrase(keyState.unlockPassphrase);
+      setKeyError(null);
     }
   }, []);
 
@@ -877,7 +889,7 @@ export function App() {
   }, [result, busy, t, openRestore]);
 
   // Prefer an uploaded key (restore in a later/fresh session) over the in-memory session key.
-  const activeKey = uploadedKey ?? result?.key ?? null;
+  const activeKey = selectActiveKey(uploadedKey, result?.key ?? null);
 
   // M1: text pasted into the MAIN input that carries 2+ placeholder tokens is almost certainly an AI
   // answer coming back, not a document to redact. Offer to route it into the restore flow instead of
