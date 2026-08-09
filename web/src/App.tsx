@@ -1022,9 +1022,15 @@ export function App() {
         </div>
       )}
       <header className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-x-4 gap-y-1 px-6 py-5">
-        <span className="text-[19px] font-semibold tracking-tight" dir="ltr">
-          Mechikon
-        </span>
+        <a
+          href="https://www.bai-solutions.com/lawyers/suite"
+          target="_blank"
+          rel="noreferrer"
+          aria-label="BAI Solutions"
+          className="inline-flex min-h-[44px] items-center rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/20"
+        >
+          <img src="/bai-logo.png" alt="BAI Solutions" className="h-9 w-auto object-contain" />
+        </a>
         {(() => {
           // The badge proves DESTINATION, not just count: a request to any host that is not same-origin
           // or a model host is an exfiltration signal → red alarm naming the host. Otherwise emerald
@@ -1080,6 +1086,7 @@ export function App() {
               event.currentTarget.style.display = "none";
             }}
           />
+          <div className="mt-3 text-xl font-semibold tracking-tight text-ink">{t("app.name")}</div>
           <h1 className="mt-6 text-4xl font-semibold leading-[1.1] tracking-tight sm:text-[3.25rem]">
             {t("hero.title")}
           </h1>
