@@ -173,6 +173,21 @@ export function installTokenizerRegexShim(): void {
 }
 
 const MODEL_ID = "onnx-community/dictabert-ner-ONNX";
+/**
+ * MODEL INTEGRITY (B6): pin the exact model snapshot instead of the mutable `main` ref. This is the
+ * main-branch commit of onnx-community/dictabert-ner-ONNX as of 2026-08-09 (the only commit the repo
+ * has ever served here; verified via the HF API). With a commit SHA, every fetch resolves
+ * `/resolve/<sha>/...` — an immutable, commit-addressed snapshot — so a later (possibly malicious)
+ * push to the model repo can never change what this app downloads and runs.
+ *
+ * Why no post-download digest check: transformers.js 4.2.0 manages fetching + browser caching
+ * internally and exposes no integrity/hash hook on the download path (the sha256 verification that
+ * exists lives only in the experimental `CrossOriginStorage` cache backend, off by default; the only
+ * intercept point would be replacing `env.customCache` wholesale — a fragile reimplementation of its
+ * cache layer). Pinning the revision + TLS is the accepted integrity measure. If the model is ever
+ * re-exported, update this SHA deliberately and re-run the recall harness.
+ */
+const MODEL_REVISION = "4f0aabf58566526df6f3fb548e0fd2619fbf2b1d";
 const DTYPE = "q8"; // int8 — q8 parity proven in Phase 0
 
 export interface HebrewNerOptions {
@@ -216,6 +231,7 @@ export async function createHebrewNer(options: HebrewNerOptions = {}): Promise<H
   const classifier = await pipeline("token-classification", MODEL_ID, {
     device: options.device ?? "wasm",
     dtype: DTYPE,
+    revision: MODEL_REVISION,
     progress_callback: options.progressCallback,
   });
 
