@@ -22,6 +22,7 @@ import type { RedactedFile, Anonymize } from "./officeRedact";
 import {
   collectFormFields,
   collectOutlineItems,
+  collectOutlineUris,
   sanitizeMetadata,
   setNeedAppearances,
   type FormFieldValue,
@@ -161,6 +162,9 @@ function readMetadataChannels(doc: any): string {
   }
   for (const item of collectOutlineItems(doc)) {
     parts.push(item.title);
+  }
+  for (const uri of collectOutlineUris(doc)) {
+    parts.push(uri); // outline /A /URI — decoded, so a hex-ASCII survivor is not invisible to layer A
   }
   for (const field of collectFormFields(doc)) {
     parts.push(field.value); // AcroForm /V — decoded, so hex-ASCII UTF-16BE strings are not invisible

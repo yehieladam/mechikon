@@ -185,6 +185,7 @@ export function sanitizeMetadata(doc: any): void {
   stripEmbeddedFiles(doc);
   clearAnnotationText(doc);
   stripAnnotationActions(doc);
+  stripOutlineActions(doc);
   stripDocJavaScript(doc);
   stripFormFieldExtras(doc);
 }
@@ -313,30 +314,67 @@ export interface OutlineItem {
  * Walk the outline (bookmark) tree and return every node with a getter for its title and a setter to
  * rewrite it. The caller anonymizes the titles (coherently with the body key) and writes them back.
  */
-export function collectOutlineItems(doc: any): OutlineItem[] {
-  const items: OutlineItem[] = [];
+/** Visit every outline (bookmark) node once (Next siblings + First children, depth-capped). */
+function walkOutline(doc: any, fn: (node: any) => void): void {
   const root = doc.getTrailer().get("Root");
   const outlines = isReal(root) ? root.get("Outlines") : null;
   if (!isReal(outlines)) {
-    return items;
+    return;
   }
-  const visit = (node: any): void => {
+  const visit = (node: any, depth: number): void => {
+    if (depth > MAX_FIELD_TREE_DEPTH) {
+      return;
+    }
     for (let current = node; isReal(current); current = current.get("Next")) {
-      const titleObj = current.get("Title");
-      if (titleObj && !(titleObj.isNull?.() ?? false) && titleObj.asString) {
-        const node2 = current;
-        items.push({
-          title: titleObj.asString(),
-          setTitle: (title: string) => node2.put("Title", doc.newString(title)),
-        });
-      }
+      fn(current);
       const child = current.get("First");
       if (isReal(child)) {
-        visit(child);
+        visit(child, depth + 1);
       }
     }
   };
-  visit(outlines.get("First"));
+  visit(outlines.get("First"), 0);
+}
+
+export function collectOutlineItems(doc: any): OutlineItem[] {
+  const items: OutlineItem[] = [];
+  walkOutline(doc, (current) => {
+    const titleObj = current.get("Title");
+    if (titleObj && !(titleObj.isNull?.() ?? false) && titleObj.asString) {
+      items.push({
+        title: titleObj.asString(),
+        setTitle: (title: string) => current.put("Title", doc.newString(title)),
+      });
+    }
+  });
   return items;
+}
+
+/**
+ * Strip PII-capable /A actions on outline (bookmark) items — a bookmark's `/A << /S /URI ... >>` can
+ * carry a mailto: with an email, and it lives in the outline tree, NOT among page annotations (so
+ * stripAnnotationActions never touched it). /Dest (an internal page destination) carries no text and
+ * is kept. Fail-closed: same isPiiAction test as page annotations (URI/JS/SubmitForm/Launch/GoToR/
+ * any /Next chain).
+ */
+export function stripOutlineActions(doc: any): void {
+  walkOutline(doc, (current) => {
+    if (isPiiAction(current.get("A"))) {
+      current.delete("A");
+    }
+  });
+}
+
+/** Decoded URIs on outline /A /URI actions — read into the verify channel so a survivor is caught. */
+export function collectOutlineUris(doc: any): string[] {
+  const uris: string[] = [];
+  walkOutline(doc, (current) => {
+    const action = current.get("A");
+    const uri = isReal(action) ? action.get("URI") : null;
+    if (isStringObj(uri)) {
+      uris.push(uri.asString());
+    }
+  });
+  return uris;
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */

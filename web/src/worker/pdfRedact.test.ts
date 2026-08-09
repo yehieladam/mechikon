@@ -507,6 +507,52 @@ describe("redactPdf — strips /A /URI link actions and document JavaScript (inv
     const b = await layerB(bytes, [EMAIL, JS_ID]);
     expect(b.pass).toBe(true);
   });
+
+  /** A one-page PDF whose OUTLINE (bookmark) item carries a mailto: /A /URI with an email — the
+   * outline is not a page annotation, so stripAnnotationActions never touched it. */
+  async function outlineUriPdf(): Promise<ArrayBuffer> {
+    // reason: mupdf's WASM surface is untyped; narrowly used to author a crafted test PDF.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mupdf = (await import("mupdf")) as any;
+    const doc = new mupdf.PDFDocument();
+    const font = doc.addSimpleFont(new mupdf.Font("Helvetica"));
+    const fonts = doc.newDictionary();
+    fonts.put("F1", font);
+    const resources = doc.newDictionary();
+    resources.put("Font", fonts);
+    doc.insertPage(-1, doc.addPage([0, 0, 612, 792], 0, resources, "BT /F1 12 Tf 50 700 Td (chapter one) Tj ET"));
+    const root = doc.getTrailer().get("Root");
+    const outlines = doc.addObject(doc.newDictionary());
+    outlines.put("Type", doc.newName("Outlines"));
+    const item = doc.addObject(doc.newDictionary());
+    item.put("Title", doc.newString("Email the author"));
+    item.put("Parent", outlines);
+    const action = doc.newDictionary();
+    action.put("S", doc.newName("URI"));
+    action.put("URI", doc.newString(`mailto:${EMAIL}`));
+    item.put("A", action);
+    outlines.put("First", item);
+    outlines.put("Last", item);
+    outlines.put("Count", doc.newInteger(1));
+    root.put("Outlines", outlines);
+    return new Uint8Array(doc.saveToBuffer({}).asUint8Array()).buffer as ArrayBuffer;
+  }
+
+  it("strips a mailto: /A /URI on an OUTLINE item — the email is gone from the bytes", async () => {
+    const buf = await outlineUriPdf();
+    const { bytes } = await redactPdf(buf, anonymizeDeterministic);
+    // reason: mupdf's WASM surface is untyped.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mupdf = (await import("mupdf")) as any;
+    const doc = mupdf.PDFDocument.openDocument(bytes, "application/pdf");
+    const first = doc.getTrailer().get("Root").get("Outlines").get("First");
+    if (first && !(first.isNull?.() ?? false)) {
+      const a = first.get("A");
+      expect(a === null || (a.isNull?.() ?? false)).toBe(true);
+    }
+    const b = await layerB(bytes, [EMAIL]);
+    expect(b.pass).toBe(true);
+  });
 });
 
 describe("extractPdfMapped — synthetic (logical-authored) fixture documents the trap", () => {
