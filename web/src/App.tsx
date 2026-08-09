@@ -1029,7 +1029,7 @@ export function App() {
           aria-label="BAI Solutions"
           className="inline-flex min-h-[44px] items-center rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/20"
         >
-          <img src="/bai-logo.png" alt="BAI Solutions" className="h-9 w-auto object-contain" />
+          <img src="/bai-logo.png" alt="BAI Solutions" className="h-[72px] w-auto object-contain" />
         </a>
         {(() => {
           // The badge proves DESTINATION, not just count: a request to any host that is not same-origin
