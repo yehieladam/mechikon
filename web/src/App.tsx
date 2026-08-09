@@ -1086,7 +1086,9 @@ export function App() {
               event.currentTarget.style.display = "none";
             }}
           />
-          <div className="mt-3 text-xl font-semibold tracking-tight text-ink">{t("app.name")}</div>
+          <div className="mt-3 text-xl font-semibold tracking-tight text-ink" dir="ltr">
+            Mechikon
+          </div>
           <h1 className="mt-6 text-4xl font-semibold leading-[1.1] tracking-tight sm:text-[3.25rem]">
             {t("hero.title")}
           </h1>
