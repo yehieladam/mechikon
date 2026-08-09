@@ -159,8 +159,9 @@ export function stripFormFieldExtras(doc: any): void {
     if (!isReal(node) || depth > MAX_FIELD_TREE_DEPTH) {
       return;
     }
-    node.delete("DV");
-    node.delete("RV");
+    node.delete("DV"); // reset-form default (verbatim value duplicate)
+    node.delete("RV"); // rich-text duplicate of /V
+    node.delete("I"); // choice-field selected INDICES — positional signal of the chosen option
     const kids = node.get("Kids");
     if (isReal(kids) && kids.isArray?.()) {
       for (let i = 0; i < kids.length; i += 1) {
@@ -197,11 +198,23 @@ export interface FormFieldValue {
   readonly setValue: (value: string) => void;
 }
 
+/** True when a PDFObject is a live, non-null string. */
+function isStringObj(obj: any): boolean {
+  return Boolean(obj) && !(obj.isNull?.() ?? false) && (obj.isString?.() ?? false);
+}
+
 /**
- * Walk the AcroForm field tree (Fields + nested Kids) and return every field carrying a STRING value,
- * with a setter that rewrites /V in place. The caller anonymizes the values through the same unified
- * pass as the body text, so a form value gets the same placeholder as its body mentions. Non-string
- * values (checkbox/radio name states like /Yes) carry no free text and are skipped.
+ * Walk the AcroForm field tree (Fields + nested Kids) and return every readable/rewritable STRING
+ * value a field carries — with a setter that rewrites it in place. The caller anonymizes these
+ * through the same unified pass as the body text, so a form value gets the same placeholder as its
+ * body mentions. Covered channels:
+ *  - a string /V (text field, single-select choice);
+ *  - each string element of an ARRAY /V (a MULTI-select choice — otherwise skipped as non-string);
+ *  - each option in /Opt (choice field option labels: a string, or a [exportValue, displayText]
+ *    pair — both sub-strings), where the selected value is duplicated AND non-selected options can
+ *    themselves be PII (a dropdown of names).
+ * Non-string states (checkbox/radio names like /Yes) carry no free text and are skipped. Every setter
+ * also drops the field's stale appearance streams (/AP) so the OLD value cannot render or survive.
  */
 export function collectFormFields(doc: any): FormFieldValue[] {
   const items: FormFieldValue[] = [];
@@ -217,12 +230,25 @@ export function collectFormFields(doc: any): FormFieldValue[] {
       }
     }
   };
+  /** Surface a string that lives at `array[index]`, rewritten in place. */
+  const pushArrayString = (node: any, depth: number, array: any, index: number): void => {
+    const element = array.get(index);
+    if (isStringObj(element)) {
+      items.push({
+        value: element.asString(),
+        setValue: (next: string) => {
+          array.put(index, doc.newString(next));
+          deleteAppearances(node, depth);
+        },
+      });
+    }
+  };
   const visit = (node: any, depth: number): void => {
     if (!isReal(node) || depth > MAX_FIELD_TREE_DEPTH) {
       return;
     }
     const value = node.get("V");
-    if (value && !(value.isNull?.() ?? false) && (value.isString?.() ?? false)) {
+    if (isStringObj(value)) {
       items.push({
         value: value.asString(),
         setValue: (next: string) => {
@@ -230,6 +256,25 @@ export function collectFormFields(doc: any): FormFieldValue[] {
           deleteAppearances(node, depth);
         },
       });
+    } else if (isReal(value) && (value.isArray?.() ?? false)) {
+      // Multi-select /V: an array of the selected export strings.
+      for (let i = 0; i < value.length; i += 1) {
+        pushArrayString(node, depth, value, i);
+      }
+    }
+    // Choice-field options: /Opt entries are strings, or [exportValue, displayText] pairs.
+    const opt = node.get("Opt");
+    if (isReal(opt) && (opt.isArray?.() ?? false)) {
+      for (let i = 0; i < opt.length; i += 1) {
+        const entry = opt.get(i);
+        if (isStringObj(entry)) {
+          pushArrayString(node, depth, opt, i);
+        } else if (isReal(entry) && (entry.isArray?.() ?? false)) {
+          for (let j = 0; j < entry.length; j += 1) {
+            pushArrayString(node, depth, entry, j);
+          }
+        }
+      }
     }
     const kids = node.get("Kids");
     if (isReal(kids) && kids.isArray?.()) {

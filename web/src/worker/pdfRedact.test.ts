@@ -342,6 +342,99 @@ describe("redactPdf — AcroForm field values (/V) are redacted and verified", (
     expect(pdfUnverified).toBeDefined();
     expect(pdfUnverified!.terms).toContain(ID);
   });
+
+  /**
+   * A choice field (combo/list box). `selected` becomes /V (a string, or an array of strings for
+   * multi-select); `options` become /Opt; the matching /I indices are set. The PII can live in /Opt
+   * and in an array /V, neither of which the string-only /V path saw.
+   */
+  async function choicePdf(selected: string | string[], options: string[]): Promise<ArrayBuffer> {
+    // reason: mupdf's WASM surface is untyped; narrowly used to author a crafted choice-field PDF.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mupdf = (await import("mupdf")) as any;
+    const doc = new mupdf.PDFDocument();
+    const font = doc.addSimpleFont(new mupdf.Font("Helvetica"));
+    const fonts = doc.newDictionary();
+    fonts.put("F1", font);
+    const resources = doc.newDictionary();
+    resources.put("Font", fonts);
+    doc.insertPage(-1, doc.addPage([0, 0, 612, 792], 0, resources, "BT /F1 12 Tf 50 700 Td (pick one) Tj ET"));
+    const pageObj = doc.loadPage(0).getObject();
+    const field = doc.addObject(doc.newDictionary());
+    field.put("FT", doc.newName("Ch"));
+    field.put("T", doc.newString("choice"));
+    if (Array.isArray(selected)) {
+      const vArray = doc.newArray();
+      for (const s of selected) {
+        vArray.push(doc.newString(s));
+      }
+      field.put("V", vArray);
+    } else {
+      field.put("V", doc.newString(selected));
+    }
+    const opt = doc.newArray();
+    for (const o of options) {
+      opt.push(doc.newString(o));
+    }
+    field.put("Opt", opt);
+    const selectedList = Array.isArray(selected) ? selected : [selected];
+    const indices = doc.newArray();
+    for (let i = 0; i < options.length; i += 1) {
+      if (selectedList.includes(options[i])) {
+        indices.push(doc.newInteger(i));
+      }
+    }
+    field.put("I", indices);
+    field.put("Type", doc.newName("Annot"));
+    field.put("Subtype", doc.newName("Widget"));
+    const rect = doc.newArray();
+    for (const n of [50, 600, 300, 620]) {
+      rect.push(n);
+    }
+    field.put("Rect", rect);
+    field.put("P", pageObj);
+    const annots = doc.newArray();
+    annots.push(field);
+    pageObj.put("Annots", annots);
+    const acroFields = doc.newArray();
+    acroFields.push(field);
+    const acroForm = doc.newDictionary();
+    acroForm.put("Fields", acroFields);
+    doc.getTrailer().get("Root").put("AcroForm", acroForm);
+    return new Uint8Array(doc.saveToBuffer({}).asUint8Array()).buffer as ArrayBuffer;
+  }
+
+  it("redacts an ID that lives ONLY in /Opt of a choice field (not in the string /V)", async () => {
+    const ID = "123456709";
+    // /V is a non-PII selection; the ID is a NON-selected option — the string-/V path never saw it.
+    const buf = await choicePdf("other", [ID, "other"]);
+    const { bytes, result } = await redactPdf(buf, anonymizeDeterministic);
+    expect(result.key.map((r) => r.original)).toContain(ID); // detected via /Opt
+    const b = await layerB(bytes, [ID]); // physically gone from the bytes
+    expect(b.pass).toBe(true);
+  });
+
+  it("redacts an ID that lives in a multi-select ARRAY /V (skipped by isString-only handling)", async () => {
+    const ID = "123456709";
+    const buf = await choicePdf([ID], [ID, "other"]);
+    const { bytes, result } = await redactPdf(buf, anonymizeDeterministic);
+    expect(result.key.map((r) => r.original)).toContain(ID);
+    const b = await layerB(bytes, [ID]);
+    expect(b.pass).toBe(true);
+  });
+
+  it("self-verify catches an /Opt survivor (claimed handled but not rewritten)", async () => {
+    const ID = "123456709";
+    const buf = await choicePdf("other", [ID, "other"]);
+    const claim = (text: string): AnonymizeResult => ({
+      anonymizedText: text.split(ID).join("[ID_1]"),
+      spans: [],
+      key: [{ placeholder: "[ID_1]", original: ID, type: "ISRAELI_ID" }],
+    });
+    const { pdfUnverified } = await redactPdf(buf, claim);
+    expect(pdfUnverified).toBeDefined();
+    expect(pdfUnverified!.terms).toContain(ID);
+  });
 });
 
 describe("redactPdf — strips /A /URI link actions and document JavaScript (invisible PII channels)", () => {
