@@ -16,9 +16,18 @@ import {
 } from "@engine/pdfText";
 import { toReplacements } from "@engine/overlay";
 import type { AnonymizeResult } from "@engine/types";
-import { layerB, layerC, textLeaks } from "@engine/pdfVerify";
+import { highConfidenceSurvivors, layerB, layerC, textLeaks } from "@engine/pdfVerify";
+import type { KeyRow } from "@engine/types";
 import type { RedactedFile, Anonymize } from "./officeRedact";
-import { collectOutlineItems, sanitizeMetadata, type OutlineItem } from "./pdfSanitize";
+import {
+  collectFormFields,
+  collectOutlineItems,
+  collectOutlineUris,
+  sanitizeMetadata,
+  setNeedAppearances,
+  type FormFieldValue,
+  type OutlineItem,
+} from "./pdfSanitize";
 
 // reason: mupdf's ESM/WASM surface (PDFDocument, PDFPage, StructuredText walker) is not worth
 // modelling in the type system; it is narrowly used here and behind a dynamic import.
@@ -59,17 +68,22 @@ function imageOnlyPageNumbers(doc: any): number[] {
     const pageArea = Math.max(1, (bounds[2] - bounds[0]) * (bounds[3] - bounds[1]));
     let textChars = 0;
     let maxImageCover = 0;
-    page.toStructuredText("preserve-whitespace,preserve-images").walk({
-      onChar(char: string) {
-        if (char.trim().length > 0) {
-          textChars += 1;
-        }
-      },
-      onImageBlock(bbox: ArrayLike<number>) {
-        const area = Math.max(0, (bbox[2] - bbox[0]) * (bbox[3] - bbox[1]));
-        maxImageCover = Math.max(maxImageCover, area / pageArea);
-      },
-    });
+    const structured = page.toStructuredText("preserve-whitespace,preserve-images");
+    try {
+      structured.walk({
+        onChar(char: string) {
+          if (char.trim().length > 0) {
+            textChars += 1;
+          }
+        },
+        onImageBlock(bbox: ArrayLike<number>) {
+          const area = Math.max(0, (bbox[2] - bbox[0]) * (bbox[3] - bbox[1]));
+          maxImageCover = Math.max(maxImageCover, area / pageArea);
+        },
+      });
+    } finally {
+      structured.destroy(); // free the per-page stext — a many-page doc otherwise grows the WASM heap
+    }
     if (textChars < NO_TEXT_LAYER_MIN_CHARS && maxImageCover >= IMAGE_ONLY_COVER_MIN) {
       pages.push(pageIndex + 1); // 1-based, for the UI warning
     }
@@ -102,22 +116,26 @@ function mappedFromDoc(doc: any): MappedText {
     const structured = doc.loadPage(pageIndex).toStructuredText("preserve-whitespace");
     const lines: { chars: CharBox[] }[] = [];
     let current: CharBox[] | null = null;
-    structured.walk({
-      beginLine() {
-        current = [];
-      },
-      endLine() {
-        if (current) {
-          lines.push({ chars: current });
-          current = null;
-        }
-      },
-      onChar(char: string, _origin: unknown, _font: unknown, _size: unknown, quad: ArrayLike<number>) {
-        if (current) {
-          current.push({ char, quad: Array.from(quad) });
-        }
-      },
-    });
+    try {
+      structured.walk({
+        beginLine() {
+          current = [];
+        },
+        endLine() {
+          if (current) {
+            lines.push({ chars: current });
+            current = null;
+          }
+        },
+        onChar(char: string, _origin: unknown, _font: unknown, _size: unknown, quad: ArrayLike<number>) {
+          if (current) {
+            current.push({ char, quad: Array.from(quad) });
+          }
+        },
+      });
+    } finally {
+      structured.destroy(); // free the per-page stext (quads are copied into `lines` above)
+    }
     pages.push({ pageIndex, lines });
   }
   return buildMappedText(pages);
@@ -131,10 +149,15 @@ function mappedFromDoc(doc: any): MappedText {
 export async function extractPdfMapped(buffer: ArrayBuffer): Promise<MappedText> {
   const mupdf: any = await import("mupdf");
   const doc = mupdf.PDFDocument.openDocument(new Uint8Array(buffer), "application/pdf");
-  return mappedFromDoc(doc);
+  try {
+    return mappedFromDoc(doc); // plain JS output (chars + copied quads) — safe to outlive the doc
+  } finally {
+    doc.destroy(); // WASM heap is not GC'd; an undestroyed doc leaks its parsed tree per call
+  }
 }
 
-/** Read every metadata channel's text (Info values, outline titles, annotation text) DECODED. */
+/** Read every metadata channel's text (Info values, outline titles, form field values, annotation
+ * text) DECODED. */
 function readMetadataChannels(doc: any): string {
   const parts: string[] = [];
   const info = doc.getTrailer().get("Info");
@@ -149,12 +172,26 @@ function readMetadataChannels(doc: any): string {
   for (const item of collectOutlineItems(doc)) {
     parts.push(item.title);
   }
+  for (const uri of collectOutlineUris(doc)) {
+    parts.push(uri); // outline /A /URI — decoded, so a hex-ASCII survivor is not invisible to layer A
+  }
+  for (const field of collectFormFields(doc)) {
+    parts.push(field.value); // AcroForm /V — decoded, so hex-ASCII UTF-16BE strings are not invisible
+  }
   const pageCount: number = doc.countPages();
   for (let i = 0; i < pageCount; i += 1) {
     const annots = doc.loadPage(i).getAnnotations?.() ?? [];
     for (const annot of annots) {
       if (annot.getContents) {
         parts.push(annot.getContents());
+      }
+      // A surviving /A /URI action (should have been stripped) — read it DECODED so layer A sees it.
+      // Each step is guarded: mupdf's get() crashes on a PDF null object rather than chaining.
+      const obj = annot.getObject?.();
+      const action = obj && !(obj.isNull?.() ?? false) ? obj.get("A") : null;
+      const uri = action && !(action.isNull?.() ?? false) ? action.get("URI") : null;
+      if (uri && (uri.isString?.() ?? false)) {
+        parts.push(uri.asString());
       }
     }
   }
@@ -168,32 +205,68 @@ function readMetadataChannels(doc: any): string {
  * reading Info/outlines/annotations is the reliable check there).
  */
 interface VisualVerify {
-  readonly ok: boolean;
-  /** The specific terms that could not be confirmed absent (layerA text + layerB bytes) — named to the
-   * user so the download is an informed, targeted check ("טל" reads as a harmless abbreviation; a real
-   * surviving name jumps out). Empty when ok. */
+  /** The HIGH-CONFIDENCE survivors (engine/pdfVerify highConfidenceSurvivors): structured values, or
+   * full multi-token name surfaces, that layer A / layer B actually flagged — named to the user so the
+   * download is an informed, targeted check. Single short name fragments that merely substring-match
+   * inside unrelated words (the #90 noise) are filtered OUT and never warned. Empty when clean. */
   readonly terms: readonly string[];
   readonly detail: string;
 }
 
-async function selfVerify(bytes: Uint8Array, needles: readonly string[]): Promise<VisualVerify> {
+async function selfVerify(bytes: Uint8Array, rows: readonly KeyRow[]): Promise<VisualVerify> {
+  const needles = [...new Set(rows.map((row) => row.original))];
   if (needles.length === 0) {
-    return { ok: true, terms: [], detail: "ok" };
+    return { terms: [], detail: "ok" };
   }
   const mupdf: any = await import("mupdf");
   const doc = mupdf.PDFDocument.openDocument(bytes, "application/pdf");
-  const bodyText = mappedFromDoc(doc).text;
-  const metaText = readMetadataChannels(doc);
+  let bodyText: string;
+  let metaText: string;
+  try {
+    bodyText = mappedFromDoc(doc).text;
+    metaText = readMetadataChannels(doc);
+  } finally {
+    doc.destroy(); // layers B/C below are pure byte work — the verify doc is no longer needed
+  }
   // Layer A: whole-word for names (a short name inside a longer legit word is NOT a leak — the false
   // positive that threw away correctly-redacted files), digit-bounded for numerics. See engine/pdfVerify.
   const layerAHits = textLeaks(bodyText, metaText, needles);
   // Layers B + C — raw-byte scan (incl. inflated streams) and structure check.
   const b = await layerB(bytes, needles);
   const c = layerC(bytes);
-  const ok = layerAHits.length === 0 && b.pass && c.pass;
-  const terms = [...new Set([...layerAHits, ...b.hits.map((h) => h.split(" [")[0])])];
+  // Warn PROVENANCE-AWARE (see highConfidenceSurvivors): every layer A hit (whole-word/digit-bounded
+  // verified) warns unconditionally; layer-B-only raw-byte hits are shape-filtered so a short-fragment
+  // substring match cannot resurface as noise. A layer-C-only anomaly without any surviving value is
+  // not a PII-survival signal (layer B already scanned every generation's bytes for every value; and
+  // SAFE_SAVE_OPTIONS pins layer C in tests), so it does not warn on its own.
+  const layerBHits = b.hits.map((h) => h.split(" [")[0]);
+  const terms = highConfidenceSurvivors(rows, layerAHits, layerBHits);
   const detail = `layerA/meta=${layerAHits.join(",") || "ok"} layerB=${b.hits.join(",") || "ok"} layerC=eof:${c.eofCount}/sx:${c.startxrefCount}`;
-  return { ok, terms, detail };
+  return { terms, detail };
+}
+
+/**
+ * Rewrite one appended range of the unified detection text with its placeholders. Returns the
+ * rewritten string, or null when no replacement falls inside the range (leave the channel untouched).
+ * Shared by outline titles and form field values so both channels apply the SAME unified key.
+ */
+function rewriteRange(
+  combined: string,
+  replacements: readonly { start: number; end: number; placeholder: string }[],
+  start: number,
+  end: number,
+): string | null {
+  const inRange = replacements.filter((r) => r.start >= start && r.end <= end);
+  if (inRange.length === 0) {
+    return null;
+  }
+  let rewritten = "";
+  let cursor = start;
+  for (const r of inRange) {
+    rewritten += combined.slice(cursor, r.start) + r.placeholder;
+    cursor = r.end;
+  }
+  return rewritten + combined.slice(cursor, end);
 }
 
 /** A redaction rect plus the placeholder token to burn onto it. */
@@ -298,6 +371,44 @@ function burnTokens(doc: any, mupdf: any, rects: readonly TokenRect[]): void {
 export async function redactPdf(buffer: ArrayBuffer, anonymize: Anonymize): Promise<RedactedFile> {
   const mupdf: any = await import("mupdf");
   const doc = mupdf.PDFDocument.openDocument(new Uint8Array(buffer), "application/pdf");
+  let produced: ProducedPdf;
+  try {
+    produced = await redactIntoBytes(mupdf, doc, anonymize);
+  } finally {
+    // WASM heap is not GC'd — release the (multi-MB) parsed document on every path, including the
+    // NO_TEXT_LAYER / TEXT_SELFVERIFY_FAILED throws, BEFORE the verify pass opens its own document.
+    // Only JS-owned copies escape redactIntoBytes (never a live WASM view), so this is safe.
+    doc.destroy();
+  }
+  const { result, bytes, unverifiedImagePages } = produced;
+  // VISUAL self-verify: gates only whether we can CERTIFY the redacted PDF clean. On failure we no longer
+  // withhold the file — the owner reviews the preview and can add missed terms — but we surface a warning
+  // (pdfUnverified) so the download is an INFORMED choice, not a blind one. The warning is SOFT and
+  // HIGH-CONFIDENCE only (B2): it fires when a structured value or a full multi-token name surface
+  // genuinely survived, never on a short fragment's coincidental substring match (the #90 noise). The
+  // Word deliverable is already hard-verified. layerB/layerC (byte + structure) still ran inside
+  // selfVerify.
+  const verify = await selfVerify(bytes, result.key);
+  const pdfUnverified =
+    verify.terms.length > 0 ? { reason: verify.detail, terms: verify.terms } : undefined;
+  return {
+    bytes,
+    result,
+    ...(pdfUnverified ? { pdfUnverified } : {}),
+    ...(unverifiedImagePages.length > 0 ? { unverifiedImagePages } : {}),
+  };
+}
+
+/** What the doc-scoped redaction pass hands back: JS-owned bytes + the detection result. */
+interface ProducedPdf {
+  readonly result: AnonymizeResult;
+  readonly bytes: Uint8Array;
+  readonly unverifiedImagePages: number[];
+}
+
+/** The doc-scoped body of redactPdf — everything that touches the open mupdf document. Split out so
+ * the caller can destroy the document in one try/finally regardless of which path threw. */
+async function redactIntoBytes(mupdf: any, doc: any, anonymize: Anonymize): Promise<ProducedPdf> {
   const mapped = mappedFromDoc(doc);
 
   // Refuse a PDF with NO usable text layer at all (a whole-document scan — there are no text pages to
@@ -311,11 +422,13 @@ export async function redactPdf(buffer: ArrayBuffer, anonymize: Anonymize): Prom
   }
   const unverifiedImagePages = imageOnlyPageNumbers(doc);
 
-  // UNIFIED detection pass: the body's logical text PLUS every outline (bookmark) title go through ONE
-  // anonymize call, so the same name is the SAME placeholder in the body and in a bookmark (and the
-  // restore key stays coherent). Body spans become glyph-quad rects; outline spans become string
-  // replacements in the titles.
+  // UNIFIED detection pass: the body's logical text PLUS every outline (bookmark) title PLUS every
+  // AcroForm field value (/V — an ID typed into a form field is invisible to the page-text walk) go
+  // through ONE anonymize call, so the same name is the SAME placeholder in the body, a bookmark and a
+  // form field (and the restore key stays coherent). Body spans become glyph-quad rects; outline/field
+  // spans become string replacements written back in place.
   const outlineItems = collectOutlineItems(doc);
+  const formFields = collectFormFields(doc);
   let combined = mapped.text;
   const titleRanges: { start: number; end: number; item: OutlineItem }[] = [];
   for (const item of outlineItems) {
@@ -323,6 +436,13 @@ export async function redactPdf(buffer: ArrayBuffer, anonymize: Anonymize): Prom
     const start = combined.length;
     combined += item.title;
     titleRanges.push({ start, end: combined.length, item });
+  }
+  const fieldRanges: { start: number; end: number; field: FormFieldValue }[] = [];
+  for (const field of formFields) {
+    combined += "\n";
+    const start = combined.length;
+    combined += field.value;
+    fieldRanges.push({ start, end: combined.length, field });
   }
 
   const result: AnonymizeResult = await anonymize(combined);
@@ -352,18 +472,25 @@ export async function redactPdf(buffer: ArrayBuffer, anonymize: Anonymize): Prom
 
   // Outlines: rewrite each title with the unified placeholders (same key as the body).
   for (const { start, end, item } of titleRanges) {
-    const inTitle = replacements.filter((r) => r.start >= start && r.end <= end);
-    if (inTitle.length === 0) {
-      continue;
+    const rewritten = rewriteRange(combined, replacements, start, end);
+    if (rewritten !== null) {
+      item.setTitle(rewritten);
     }
-    let rewritten = "";
-    let cursor = start;
-    for (const r of inTitle) {
-      rewritten += combined.slice(cursor, r.start) + r.placeholder;
-      cursor = r.end;
+  }
+
+  // AcroForm fields: rewrite each /V with the unified placeholders. setValue also drops the field's
+  // stale appearance streams (they render — and physically carry — the OLD value); NeedAppearances
+  // tells viewers to regenerate them from the rewritten /V.
+  let anyFieldRewritten = false;
+  for (const { start, end, field } of fieldRanges) {
+    const rewritten = rewriteRange(combined, replacements, start, end);
+    if (rewritten !== null) {
+      field.setValue(rewritten);
+      anyFieldRewritten = true;
     }
-    rewritten += combined.slice(cursor, end);
-    item.setTitle(rewritten);
+  }
+  if (anyFieldRewritten) {
+    setNeedAppearances(doc);
   }
 
   const PDFPage = mupdf.PDFPage;
@@ -394,20 +521,9 @@ export async function redactPdf(buffer: ArrayBuffer, anonymize: Anonymize): Prom
   // were already anonymized above through the unified key.
   sanitizeMetadata(doc);
 
-  // asUint8Array() is a live view into WASM memory — the self-verify below re-opens mupdf and would
-  // clobber it. Copy into a JS-owned buffer immediately.
+  // asUint8Array() is a live view into WASM memory — the caller destroys this document and the
+  // self-verify re-opens mupdf, either of which would clobber it. Copy into a JS-owned buffer now.
   const bytes = new Uint8Array(doc.saveToBuffer(SAFE_SAVE_OPTIONS).asUint8Array());
-  // VISUAL self-verify: gates only whether we can CERTIFY the redacted PDF clean. On failure we no longer
-  // withhold the file — the owner reviews the preview and can add missed terms — but we surface a warning
-  // (pdfUnverified) so the download is an INFORMED choice, not a blind one. The Word deliverable above is
-  // already hard-verified. layerB/layerC (byte + structure) still ran inside selfVerify.
-  const verify = await selfVerify(bytes, result.key.map((row) => row.original));
-  const pdfUnverified = verify.ok ? undefined : { reason: verify.detail, terms: verify.terms };
-  return {
-    bytes,
-    result,
-    ...(pdfUnverified ? { pdfUnverified } : {}),
-    ...(unverifiedImagePages.length > 0 ? { unverifiedImagePages } : {}),
-  };
+  return { result, bytes, unverifiedImagePages };
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */

@@ -19,6 +19,7 @@
  */
 
 import { occursAsWholeWord } from "./occurrences";
+import type { EntityType, KeyRow } from "./types";
 
 const utf8Encoder = new TextEncoder();
 
@@ -104,6 +105,81 @@ export function textLeaks(bodyText: string, metaText: string, needles: readonly 
     const name = stripControls(needle).trim();
     return name.length > 0 && wholeWordLeak(name);
   });
+}
+
+/**
+ * Structured (deterministic/scan-numeric) types: the needle is a complete identifier, so any verified
+ * hit of it (whole-word/digit-bounded text hit, or a raw-byte hit of the full value) is a real,
+ * targeted leak signal — never fragment noise.
+ */
+const STRUCTURED_TYPES: ReadonlySet<EntityType> = new Set<EntityType>([
+  "ISRAELI_ID",
+  "IL_COMPANY",
+  "IL_PHONE",
+  "IL_IBAN",
+  "IL_CASE",
+  "IL_LAND",
+  "IL_POLICY",
+  "IL_INSURED",
+  "EMAIL_ADDRESS",
+  "IL_NUMBER",
+]);
+
+/** Below this many digits, a numeric needle is too short to trust a raw-byte SUBSTRING match: a 1-4
+ * digit run substring-matches inside PDF xref/offset tables and object numbers constantly. Such a
+ * value is only warned when LAYER A (digit-bounded, verified) flagged it, never on a layer-B-only hit. */
+const MIN_LAYERB_NUMERIC_DIGITS = 5;
+
+/** A layer-B-only (raw-byte substring) hit is high-confidence iff it is a full-value survival: a
+ * structured value, or a full multi-token name surface. An ultra-short (<5-digit) numeric is excluded
+ * — a raw-byte substring of so few digits is dominated by hex/offset-table noise (layer A still
+ * warns it, since layer A matching is digit-bounded). */
+function isHighConfidenceByteHit(row: Pick<KeyRow, "original" | "type">): boolean {
+  const digits = normalizeForLeak(row.original);
+  if (/^\d+$/.test(digits)) {
+    return digits.length >= MIN_LAYERB_NUMERIC_DIGITS; // digits-only surface: trust only if long enough
+  }
+  const isStructured = STRUCTURED_TYPES.has(row.type);
+  const isFullMultiToken = stripControls(row.original).trim().split(/\s+/).filter(Boolean).length >= 2;
+  return isStructured || isFullMultiToken;
+}
+
+/**
+ * B2 soft-warn filter — which surviving needles are worth WARNING the user about, PROVENANCE-AWARE.
+ * Owner decision (PR #90 context): a naive warning fired on short name fragments whose bytes merely
+ * substring-matched inside unrelated words. But that noise is specific to layer B (a raw-byte
+ * SUBSTRING scan — it must stay paranoid). Layer A hits come from textLeaks, which is ALREADY
+ * whole-word for names and digit-bounded for numerics, so a layer A hit is a verified full-value
+ * survival, never fragment noise. Therefore:
+ *  - `layerAHits` (verified) → warned UNCONDITIONALLY, whatever the shape (a single-token surname
+ *    that survived whole in the re-extracted text is a real leak, not noise);
+ *  - `layerBHits` (raw-byte substring) → warned only when high-confidence: a STRUCTURED value
+ *    (ID/phone/company/IBAN/email/case/land/policy/insured, or any digits-only surface, e.g. a
+ *    numeric MANUAL term), or a FULL MULTI-TOKEN name surface. A layer-B-only single-token fragment
+ *    ("דן", "Dan") is dropped — exactly the #90 noise.
+ * Pure. Returns rows' original surfaces (deduped, reading order), only for values that actually hit.
+ */
+export function highConfidenceSurvivors(
+  rows: readonly Pick<KeyRow, "original" | "type">[],
+  layerAHits: readonly string[],
+  layerBHits: readonly string[],
+): string[] {
+  const inA = new Set(layerAHits);
+  const inB = new Set(layerBHits);
+  const seen = new Set<string>();
+  const survivors: string[] = [];
+  for (const row of rows) {
+    if (seen.has(row.original)) {
+      continue;
+    }
+    // Layer A is verified (whole-word/digit-bounded) → always warn. Layer-B-only hits are shape-filtered.
+    const warn = inA.has(row.original) || (inB.has(row.original) && isHighConfidenceByteHit(row));
+    if (warn) {
+      seen.add(row.original);
+      survivors.push(row.original);
+    }
+  }
+  return survivors;
 }
 
 /** A stream whose payload is a font program or image — skip it (binary false positives). */

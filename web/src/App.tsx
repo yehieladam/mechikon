@@ -255,6 +255,11 @@ export function App() {
   // Mixed digital+scanned PDF (B3): image-only pages we could not verify clean. The file is still
   // produced and downloadable; this drives a NON-blocking per-page warning. 1-based page numbers.
   const [unverifiedImagePages, setUnverifiedImagePages] = useState<readonly number[]>([]);
+  // PDF visual self-verify (B2): HIGH-CONFIDENCE values (full IDs / full multi-token names) the byte-level
+  // leak scan could not confirm absent from the redacted PDF. NON-blocking — the download stays enabled;
+  // this drives an amber "review these before sharing" notice naming the values. Fragment-substring noise
+  // is already filtered out worker-side (engine/pdfVerify highConfidenceSurvivors).
+  const [pdfUnverifiedTerms, setPdfUnverifiedTerms] = useState<readonly string[]>([]);
   // Scanned-PDF OCR (Stage 5): a scan awaiting the NER model before its single OCR pass, the live
   // per-page progress, and the two-tier refusal ("lowQuality" = readable-poorly; "unsafe" = the rare
   // internal-safety refusals SCAN_UNMAPPABLE_PII / SCAN_SELFVERIFY_FAILED).
@@ -336,6 +341,7 @@ export function App() {
     setScannedNotice(false);
     setScanNotice(null); // a fresh result clears any leftover scan refusal from a prior file
     setUnverifiedImagePages([]); // and any prior mixed-PDF per-page warning
+    setPdfUnverifiedTerms([]); // and any prior PDF self-verify warning (B2) — a new result re-verifies
     // Any result mints a NEW key, so an earlier download no longer covers it.
     setKeyDownloaded(false);
     setPassphraseMissing(false);
@@ -462,7 +468,12 @@ export function App() {
           }
         }
         setSource({ kind: "file", name: file.name, buffer });
-        const { result: anonymized, bytes, unverifiedImagePages: unverified } = await getEngine().redactFile(
+        const {
+          result: anonymized,
+          bytes,
+          unverifiedImagePages: unverified,
+          pdfUnverified,
+        } = await getEngine().redactFile(
           file.name,
           buffer,
           [],
@@ -476,6 +487,7 @@ export function App() {
           setRedacted({ bytes, name: redactedName(file.name), mime: mimeFor(file.name) });
         }
         setUnverifiedImagePages(unverified ?? []); // mixed-PDF per-page warning (after showResult cleared it)
+        setPdfUnverifiedTerms(pdfUnverified?.terms ?? []); // B2 soft warning (after showResult cleared it)
         if (!manualOnlyRef.current) {
           void loadNer();
         }
@@ -548,7 +560,7 @@ export function App() {
           }
           return;
         }
-        const { result: upgraded, bytes } = await getEngine().redactFile(
+        const { result: upgraded, bytes, pdfUnverified } = await getEngine().redactFile(
           source.name,
           source.buffer,
           manualTerms,
@@ -565,6 +577,7 @@ export function App() {
         if (bytes) {
           setRedacted({ bytes, name: redactedName(source.name), mime: mimeFor(source.name) });
         }
+        setPdfUnverifiedTerms(pdfUnverified?.terms ?? []); // B2 soft warning (after showResult cleared it)
       } catch {
         // The NER-pass redaction genuinely failed (e.g. the TEXT self-verify refused a leaky AI-text, or
         // an office self-verify). Never leave the earlier deterministic-only download in place — that
@@ -605,7 +618,7 @@ export function App() {
             ),
           );
         } else {
-          const { result, bytes } = await getEngine().redactFile(
+          const { result, bytes, pdfUnverified } = await getEngine().redactFile(
             source.name,
             source.buffer,
             terms,
@@ -618,6 +631,7 @@ export function App() {
           if (bytes) {
             setRedacted({ bytes, name: redactedName(source.name), mime: mimeFor(source.name) });
           }
+          setPdfUnverifiedTerms(pdfUnverified?.terms ?? []); // B2 soft warning (after showResult cleared it)
         }
       } catch {
         // A manual term re-triggered redaction that failed — pull any stale download so the user never
@@ -1162,6 +1176,14 @@ export function App() {
               role="alert"
             >
               {t("result.unverifiedImagePages", { pages: unverifiedImagePages.join(", ") })}
+            </div>
+          )}
+          {pdfUnverifiedTerms.length > 0 && (
+            <div
+              className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-[13px] leading-relaxed text-amber-800"
+              role="alert"
+            >
+              {t("result.pdfUnverified", { terms: pdfUnverifiedTerms.join(", ") })}
             </div>
           )}
           {scanProgress && (

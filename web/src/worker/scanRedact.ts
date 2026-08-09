@@ -67,6 +67,49 @@ export async function redactScan(
 ): Promise<RedactedFile> {
   const mupdf: any = await import("mupdf");
   const doc = mupdf.PDFDocument.openDocument(new Uint8Array(buffer), "application/pdf");
+  // Everything that touches the open source document runs inside redactScanDoc, called under one
+  // try/finally so ANY throw (OCR reject, SCAN_UNMAPPABLE_PII, gate refusal) still releases the WASM
+  // heap. Only JS-owned values escape (the copied bytes + the accumulated text/spans).
+  let produced: ScanProduced;
+  try {
+    produced = await redactScanDoc(mupdf, doc, ocr, detect, onProgress);
+  } finally {
+    doc.destroy(); // release the source document on every path, before the verify pass opens its own
+  }
+  const { bytes, redactedPages, combinedText, allSpans, unverifiedImagePages } = produced;
+  // Fixed-point self-verify: re-detect the OUTPUT and require it to find nothing (Stage 4).
+  await selfVerifyScan(bytes, ocr, detect, redactedPages, onProgress);
+
+  // Document-level tokenization (Stage 6): the unified spans → one tokenized "Word for AI" text + one
+  // restore key with unified numbering. Mark each key row's OCR fidelity, and text self-verify (a
+  // validated original surviving in the AI text is a tokenization bug → refuse, like the pixel verify).
+  const tokenized = tokenize(combinedText, allSpans);
+  const key = markScanKeySources(tokenized.key);
+  if (scanTextLeaks(tokenized.anonymizedText, key).length > 0) {
+    throw new Error(SCAN_SELFVERIFY_FAILED);
+  }
+  const result: AnonymizeResult = { anonymizedText: tokenized.anonymizedText, spans: [], key };
+  return { bytes, result, ...(unverifiedImagePages.length > 0 ? { unverifiedImagePages } : {}) };
+}
+
+/** What the doc-scoped scan pass hands back — all JS-owned (safe to outlive the destroyed document). */
+interface ScanProduced {
+  readonly bytes: Uint8Array;
+  readonly redactedPages: number[];
+  readonly combinedText: string;
+  readonly allSpans: Span[];
+  readonly unverifiedImagePages: number[];
+}
+
+/** The doc-scoped body of redactScan — everything that reads or mutates the open source document.
+ * Split out so the caller destroys the document in one try/finally regardless of which path threw. */
+async function redactScanDoc(
+  mupdf: any,
+  doc: any,
+  ocr: ScanOcr,
+  detect: ScanDetect,
+  onProgress?: ScanProgress,
+): Promise<ScanProduced> {
   const PDFPage = mupdf.PDFPage;
   const scale = OCR_RENDER_DPI / 72;
   // Document-level tokenization (Stage 6): accumulate each page's OCR text + its unified spans (shifted
@@ -87,8 +130,14 @@ export async function redactScan(
     // Rasterize at the calibrated DPI and OCR the raster (a scan has no text layer to read).
     const pixmap = page.toPixmap(mupdf.Matrix.scale(scale, scale), mupdf.ColorSpace.DeviceRGB, false);
     const image = { width: pixmap.getWidth(), height: pixmap.getHeight() };
-    const ocrPage = await ocr(new Uint8Array(pixmap.asPNG()));
-    pixmap.destroy(); // free the multi-MB WASM bitmap now — a multi-page scan otherwise grows the heap unboundedly
+    let ocrPage: OcrPageResult;
+    try {
+      ocrPage = await ocr(new Uint8Array(pixmap.asPNG()));
+    } finally {
+      // free the multi-MB WASM bitmap now, even if OCR throws — a multi-page scan otherwise grows the
+      // heap unboundedly (and a leaked pixmap survives the doc.destroy in the caller).
+      pixmap.destroy();
+    }
 
     // Quality gate: a page we cannot read reliably is NOT redacted and is flagged for a per-page warning
     // (owner decision: produce + warn, not whole-file refuse). If EVERY page is unverified the file is
@@ -131,9 +180,8 @@ export async function redactScan(
 
   // Every page unreadable → nothing was redacted or verified → refuse (a whole-document unreadable scan;
   // producing an all-unverified file is pointless). A MIXED / partially-readable file falls through to
-  // produce + warn with the unverified pages reported.
+  // produce + warn with the unverified pages reported. The caller's finally destroys the document.
   if (unverifiedImagePages.length === pageCount) {
-    doc.destroy();
     throw new Error(SCAN_LOW_CONFIDENCE);
   }
 
@@ -147,22 +195,10 @@ export async function redactScan(
     item.setTitle("");
   }
 
-  // Copy out of WASM memory before self-verify re-opens mupdf (asUint8Array is a live view).
+  // Copy out of WASM memory before the caller destroys the doc and self-verify re-opens mupdf
+  // (asUint8Array is a live view).
   const bytes = new Uint8Array(doc.saveToBuffer(SAFE_SAVE_OPTIONS).asUint8Array());
-  doc.destroy(); // release the source document heap before the verify pass opens its own
-  // Fixed-point self-verify: re-detect the OUTPUT and require it to find nothing (Stage 4).
-  await selfVerifyScan(bytes, ocr, detect, redactedPages, onProgress);
-
-  // Document-level tokenization (Stage 6): the unified spans → one tokenized "Word for AI" text + one
-  // restore key with unified numbering. Mark each key row's OCR fidelity, and text self-verify (a
-  // validated original surviving in the AI text is a tokenization bug → refuse, like the pixel verify).
-  const tokenized = tokenize(combinedText, allSpans);
-  const key = markScanKeySources(tokenized.key);
-  if (scanTextLeaks(tokenized.anonymizedText, key).length > 0) {
-    throw new Error(SCAN_SELFVERIFY_FAILED);
-  }
-  const result: AnonymizeResult = { anonymizedText: tokenized.anonymizedText, spans: [], key };
-  return { bytes, result, ...(unverifiedImagePages.length > 0 ? { unverifiedImagePages } : {}) };
+  return { bytes, redactedPages, combinedText, allSpans, unverifiedImagePages };
 }
 
 /**

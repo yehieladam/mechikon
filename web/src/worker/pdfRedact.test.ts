@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import { extractPdfMapped, redactPdf, NO_TEXT_LAYER } from "./pdfRedact";
 import { collectOutlineItems } from "./pdfSanitize";
 import { anonymizeDeterministic, anonymizeFull, detectDeterministic } from "@engine/pipeline";
+import type { AnonymizeResult } from "@engine/types";
 import { quadsForSpan, refsToRects } from "@engine/pdfText";
 import { layerB, layerC } from "@engine/pdfVerify";
 
@@ -194,6 +195,398 @@ describe("redactPdf refuses a PDF with no text layer (scanned/image)", () => {
     doc.insertPage(-1, doc.addPage([0, 0, 200, 200], 0, doc.newDictionary(), "1 0 0 rg 0 0 200 200 re f"));
     const bytes = new Uint8Array(doc.saveToBuffer({}).asUint8Array()).buffer;
     await expect(redactPdf(bytes, anonymizeDeterministic)).rejects.toThrow(NO_TEXT_LAYER);
+  });
+});
+
+describe("redactPdf — pdfUnverified soft warning is HIGH-CONFIDENCE only (B2)", () => {
+  // Build a minimal text PDF in-process (Helvetica simple font → the content stream carries the
+  // literal ASCII text, which is exactly what layer B's raw-byte scan sees after inflating).
+  async function latinPdf(text: string): Promise<ArrayBuffer> {
+    // reason: mupdf's WASM surface is untyped; narrowly used to author a crafted test PDF.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mupdf = (await import("mupdf")) as any;
+    const doc = new mupdf.PDFDocument();
+    const font = doc.addSimpleFont(new mupdf.Font("Helvetica"));
+    const fonts = doc.newDictionary();
+    fonts.put("F1", font);
+    const resources = doc.newDictionary();
+    resources.put("Font", fonts);
+    const contents = `BT /F1 12 Tf 50 700 Td (${text}) Tj ET`;
+    doc.insertPage(-1, doc.addPage([0, 0, 612, 792], 0, resources, contents));
+    return new Uint8Array(doc.saveToBuffer({}).asUint8Array()).buffer as ArrayBuffer;
+  }
+
+  /** An anonymize stub that CLAIMS the value is redacted (clean AI-text + key row) but supplies NO
+   * span — so the quad redaction never removes it from the page and it must survive into self-verify.
+   * Models the exact B2 leak: redaction quads missed a value the key says was handled. */
+  const claimRedacted =
+    (original: string, type: "ISRAELI_ID" | "PERSON", placeholder: string) =>
+    (text: string): AnonymizeResult => ({
+      anonymizedText: text.split(original).join(placeholder),
+      spans: [],
+      key: [{ placeholder, original, type }],
+    });
+
+  it("WARNS when a full ID survives the redaction quads — pdfUnverified names it, bytes still produced", async () => {
+    const buf = await latinPdf("hello 123456709 world");
+    const { bytes, pdfUnverified } = await redactPdf(buf, claimRedacted("123456709", "ISRAELI_ID", "[ID_1]"));
+    expect(bytes.length).toBeGreaterThan(0); // NON-blocking: the download stays available
+    expect(pdfUnverified).toBeDefined();
+    expect(pdfUnverified!.terms).toContain("123456709");
+  });
+
+  it("WARNS when a full multi-token PERSON surface survives whole", async () => {
+    const buf = await latinPdf("contract of Israel Israeli signed here");
+    const { bytes, pdfUnverified } = await redactPdf(
+      buf,
+      claimRedacted("Israel Israeli", "PERSON", "[NAME_1]"),
+    );
+    expect(bytes.length).toBeGreaterThan(0);
+    expect(pdfUnverified).toBeDefined();
+    expect(pdfUnverified!.terms).toContain("Israel Israeli");
+  });
+
+  it("WARNS on a SINGLE-TOKEN surname that survives in the re-extracted text (layer A provenance)", async () => {
+    // A single-token PERSON the redaction quads missed: it stays whole in the page text, so layer A
+    // (whole-word) flags it. Layer A hits are verified survivors, never fragment noise — the warning
+    // must fire even though the surname is a single token (the HIGH under-warn the review caught).
+    const buf = await latinPdf("signed by Abramovich in court");
+    const { bytes, pdfUnverified } = await redactPdf(buf, claimRedacted("Abramovich", "PERSON", "[NAME_1]"));
+    expect(bytes.length).toBeGreaterThan(0);
+    expect(pdfUnverified).toBeDefined();
+    expect(pdfUnverified!.terms).toContain("Abramovich");
+  });
+
+  it("does NOT warn when a short name fragment only substring-matches inside another word (no noise)", async () => {
+    // "Dan" was (per the key) redacted; the page text only contains "Danube", whose raw bytes
+    // substring-match "Dan" in layer B. That is the #90 false positive — it must NOT resurface.
+    const buf = await latinPdf("the Danube river flows east");
+    const { bytes, pdfUnverified } = await redactPdf(buf, claimRedacted("Dan", "PERSON", "[NAME_1]"));
+    expect(bytes.length).toBeGreaterThan(0);
+    expect(pdfUnverified).toBeUndefined(); // no warning, no noise — the value did not survive whole
+  });
+});
+
+describe("redactPdf — AcroForm field values (/V) are redacted and verified", () => {
+  /** A one-page PDF with body text plus a filled AcroForm text field (an ID typed into the form). */
+  async function formPdf(fieldValue: string): Promise<ArrayBuffer> {
+    // reason: mupdf's WASM surface is untyped; narrowly used to author a crafted form PDF.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mupdf = (await import("mupdf")) as any;
+    const doc = new mupdf.PDFDocument();
+    const font = doc.addSimpleFont(new mupdf.Font("Helvetica"));
+    const fonts = doc.newDictionary();
+    fonts.put("F1", font);
+    const resources = doc.newDictionary();
+    resources.put("Font", fonts);
+    doc.insertPage(-1, doc.addPage([0, 0, 612, 792], 0, resources, "BT /F1 12 Tf 50 700 Td (application form) Tj ET"));
+    const pageObj = doc.loadPage(0).getObject();
+    const field = doc.addObject(doc.newDictionary());
+    field.put("FT", doc.newName("Tx"));
+    field.put("T", doc.newString("idNumber"));
+    field.put("V", doc.newString(fieldValue));
+    field.put("Type", doc.newName("Annot"));
+    field.put("Subtype", doc.newName("Widget"));
+    const rect = doc.newArray();
+    for (const n of [50, 600, 300, 620]) {
+      rect.push(n);
+    }
+    field.put("Rect", rect);
+    field.put("P", pageObj);
+    const annots = doc.newArray();
+    annots.push(field);
+    pageObj.put("Annots", annots);
+    const acroFields = doc.newArray();
+    acroFields.push(field);
+    const acroForm = doc.newDictionary();
+    acroForm.put("Fields", acroFields);
+    doc.getTrailer().get("Root").put("AcroForm", acroForm);
+    return new Uint8Array(doc.saveToBuffer({}).asUint8Array()).buffer as ArrayBuffer;
+  }
+
+  /** Read the first AcroForm field's /V from raw structure (independent of the implementation). */
+  // reason: mupdf's WASM surface is untyped.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function firstFieldValue(doc: any): string {
+    return doc.getTrailer().get("Root").get("AcroForm").get("Fields").get(0).get("V").asString();
+  }
+
+  it("rewrites a field /V holding an ID to the placeholder; the ID is gone from the bytes", async () => {
+    const ID = "123456709";
+    const buf = await formPdf(ID);
+    const { bytes, result, pdfUnverified } = await redactPdf(buf, anonymizeDeterministic);
+    expect(result.key.map((r) => r.original)).toContain(ID); // the form value WAS detected
+    // reason: mupdf's WASM surface is untyped.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mupdf = (await import("mupdf")) as any;
+    const doc = mupdf.PDFDocument.openDocument(bytes, "application/pdf");
+    const value = firstFieldValue(doc);
+    expect(value).not.toContain(ID);
+    expect(value).toMatch(/\[ID_\d+\]/); // same unified key as the body
+    const b = await layerB(bytes, [ID]); // physically gone (incl. any appearance stream)
+    expect(b.pass).toBe(true);
+    expect(pdfUnverified).toBeUndefined(); // verified clean, no warning needed
+  });
+
+  it("self-verify READS field values: a /V survivor is caught and warned, not shipped silently", async () => {
+    const ID = "123456709";
+    const buf = await formPdf(ID);
+    // An anonymize that CLAIMS the ID was handled (clean AI-text + key row) but supplies no span —
+    // if the /V rewrite channel regressed, the value would survive; the verify channel must catch it.
+    const claim = (text: string): AnonymizeResult => ({
+      anonymizedText: text.split(ID).join("[ID_1]"),
+      spans: [],
+      key: [{ placeholder: "[ID_1]", original: ID, type: "ISRAELI_ID" }],
+    });
+    const { pdfUnverified } = await redactPdf(buf, claim);
+    expect(pdfUnverified).toBeDefined();
+    expect(pdfUnverified!.terms).toContain(ID);
+  });
+
+  /**
+   * A choice field (combo/list box). `selected` becomes /V (a string, or an array of strings for
+   * multi-select); `options` become /Opt; the matching /I indices are set. The PII can live in /Opt
+   * and in an array /V, neither of which the string-only /V path saw.
+   */
+  async function choicePdf(selected: string | string[], options: string[]): Promise<ArrayBuffer> {
+    // reason: mupdf's WASM surface is untyped; narrowly used to author a crafted choice-field PDF.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mupdf = (await import("mupdf")) as any;
+    const doc = new mupdf.PDFDocument();
+    const font = doc.addSimpleFont(new mupdf.Font("Helvetica"));
+    const fonts = doc.newDictionary();
+    fonts.put("F1", font);
+    const resources = doc.newDictionary();
+    resources.put("Font", fonts);
+    doc.insertPage(-1, doc.addPage([0, 0, 612, 792], 0, resources, "BT /F1 12 Tf 50 700 Td (pick one) Tj ET"));
+    const pageObj = doc.loadPage(0).getObject();
+    const field = doc.addObject(doc.newDictionary());
+    field.put("FT", doc.newName("Ch"));
+    field.put("T", doc.newString("choice"));
+    if (Array.isArray(selected)) {
+      const vArray = doc.newArray();
+      for (const s of selected) {
+        vArray.push(doc.newString(s));
+      }
+      field.put("V", vArray);
+    } else {
+      field.put("V", doc.newString(selected));
+    }
+    const opt = doc.newArray();
+    for (const o of options) {
+      opt.push(doc.newString(o));
+    }
+    field.put("Opt", opt);
+    const selectedList = Array.isArray(selected) ? selected : [selected];
+    const indices = doc.newArray();
+    for (let i = 0; i < options.length; i += 1) {
+      if (selectedList.includes(options[i])) {
+        indices.push(doc.newInteger(i));
+      }
+    }
+    field.put("I", indices);
+    field.put("Type", doc.newName("Annot"));
+    field.put("Subtype", doc.newName("Widget"));
+    const rect = doc.newArray();
+    for (const n of [50, 600, 300, 620]) {
+      rect.push(n);
+    }
+    field.put("Rect", rect);
+    field.put("P", pageObj);
+    const annots = doc.newArray();
+    annots.push(field);
+    pageObj.put("Annots", annots);
+    const acroFields = doc.newArray();
+    acroFields.push(field);
+    const acroForm = doc.newDictionary();
+    acroForm.put("Fields", acroFields);
+    doc.getTrailer().get("Root").put("AcroForm", acroForm);
+    return new Uint8Array(doc.saveToBuffer({}).asUint8Array()).buffer as ArrayBuffer;
+  }
+
+  it("redacts an ID that lives ONLY in /Opt of a choice field (not in the string /V)", async () => {
+    const ID = "123456709";
+    // /V is a non-PII selection; the ID is a NON-selected option — the string-/V path never saw it.
+    const buf = await choicePdf("other", [ID, "other"]);
+    const { bytes, result } = await redactPdf(buf, anonymizeDeterministic);
+    expect(result.key.map((r) => r.original)).toContain(ID); // detected via /Opt
+    const b = await layerB(bytes, [ID]); // physically gone from the bytes
+    expect(b.pass).toBe(true);
+  });
+
+  it("redacts an ID that lives in a multi-select ARRAY /V (skipped by isString-only handling)", async () => {
+    const ID = "123456709";
+    const buf = await choicePdf([ID], [ID, "other"]);
+    const { bytes, result } = await redactPdf(buf, anonymizeDeterministic);
+    expect(result.key.map((r) => r.original)).toContain(ID);
+    const b = await layerB(bytes, [ID]);
+    expect(b.pass).toBe(true);
+  });
+
+  it("self-verify catches an /Opt survivor (claimed handled but not rewritten)", async () => {
+    const ID = "123456709";
+    const buf = await choicePdf("other", [ID, "other"]);
+    const claim = (text: string): AnonymizeResult => ({
+      anonymizedText: text.split(ID).join("[ID_1]"),
+      spans: [],
+      key: [{ placeholder: "[ID_1]", original: ID, type: "ISRAELI_ID" }],
+    });
+    const { pdfUnverified } = await redactPdf(buf, claim);
+    expect(pdfUnverified).toBeDefined();
+    expect(pdfUnverified!.terms).toContain(ID);
+  });
+});
+
+describe("redactPdf — strips /A /URI link actions and document JavaScript (invisible PII channels)", () => {
+  const EMAIL = "dan.cohen@example.com";
+  const JS_ID = "123456709";
+
+  /** A one-page PDF with a mailto: link action carrying an email, and doc-level /Names /JavaScript
+   * whose script embeds PII. Neither is part of the page text, so redaction never sees them. */
+  async function linkJsPdf(): Promise<ArrayBuffer> {
+    // reason: mupdf's WASM surface is untyped; narrowly used to author a crafted test PDF.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mupdf = (await import("mupdf")) as any;
+    const doc = new mupdf.PDFDocument();
+    const font = doc.addSimpleFont(new mupdf.Font("Helvetica"));
+    const fonts = doc.newDictionary();
+    fonts.put("F1", font);
+    const resources = doc.newDictionary();
+    resources.put("Font", fonts);
+    doc.insertPage(-1, doc.addPage([0, 0, 612, 792], 0, resources, "BT /F1 12 Tf 50 700 Td (contact us) Tj ET"));
+    const pageObj = doc.loadPage(0).getObject();
+
+    const link = doc.addObject(doc.newDictionary());
+    link.put("Type", doc.newName("Annot"));
+    link.put("Subtype", doc.newName("Link"));
+    const rect = doc.newArray();
+    for (const n of [50, 690, 150, 710]) {
+      rect.push(n);
+    }
+    link.put("Rect", rect);
+    const action = doc.newDictionary();
+    action.put("S", doc.newName("URI"));
+    action.put("URI", doc.newString(`mailto:${EMAIL}`));
+    link.put("A", action);
+    const annots = doc.newArray();
+    annots.push(link);
+    pageObj.put("Annots", annots);
+
+    const jsAction = doc.newDictionary();
+    jsAction.put("S", doc.newName("JavaScript"));
+    jsAction.put("JS", doc.newString(`app.alert("id ${JS_ID}");`));
+    const namesArray = doc.newArray();
+    namesArray.push(doc.newString("init"));
+    namesArray.push(doc.addObject(jsAction));
+    const jsTree = doc.newDictionary();
+    jsTree.put("Names", namesArray);
+    const names = doc.newDictionary();
+    names.put("JavaScript", jsTree);
+    doc.getTrailer().get("Root").put("Names", names);
+    return new Uint8Array(doc.saveToBuffer({}).asUint8Array()).buffer as ArrayBuffer;
+  }
+
+  it("the mailto: email and the script PII are gone from the redacted bytes", async () => {
+    const buf = await linkJsPdf();
+    const { bytes } = await redactPdf(buf, anonymizeDeterministic);
+    // reason: mupdf's WASM surface is untyped.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mupdf = (await import("mupdf")) as any;
+    const doc = mupdf.PDFDocument.openDocument(bytes, "application/pdf");
+    // The URI action is stripped from the link annotation.
+    const annots = doc.getTrailer().get("Root").get("Pages").get("Kids").get(0).get("Annots");
+    if (annots && !(annots.isNull?.() ?? false) && annots.length > 0) {
+      const a = annots.get(0).get("A");
+      expect(a === null || (a.isNull?.() ?? false)).toBe(true);
+    }
+    // Document JavaScript is deleted wholesale.
+    const namesDict = doc.getTrailer().get("Root").get("Names");
+    const js = namesDict && !(namesDict.isNull?.() ?? false) ? namesDict.get("JavaScript") : null;
+    expect(js === null || (js.isNull?.() ?? false)).toBe(true);
+    // And the PII is physically gone from the bytes (the real gate).
+    const b = await layerB(bytes, [EMAIL, JS_ID]);
+    expect(b.pass).toBe(true);
+  });
+
+  /** A one-page PDF whose OUTLINE (bookmark) item carries a mailto: /A /URI with an email — the
+   * outline is not a page annotation, so stripAnnotationActions never touched it. */
+  async function outlineUriPdf(): Promise<ArrayBuffer> {
+    // reason: mupdf's WASM surface is untyped; narrowly used to author a crafted test PDF.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mupdf = (await import("mupdf")) as any;
+    const doc = new mupdf.PDFDocument();
+    const font = doc.addSimpleFont(new mupdf.Font("Helvetica"));
+    const fonts = doc.newDictionary();
+    fonts.put("F1", font);
+    const resources = doc.newDictionary();
+    resources.put("Font", fonts);
+    doc.insertPage(-1, doc.addPage([0, 0, 612, 792], 0, resources, "BT /F1 12 Tf 50 700 Td (chapter one) Tj ET"));
+    const root = doc.getTrailer().get("Root");
+    const outlines = doc.addObject(doc.newDictionary());
+    outlines.put("Type", doc.newName("Outlines"));
+    const item = doc.addObject(doc.newDictionary());
+    item.put("Title", doc.newString("Email the author"));
+    item.put("Parent", outlines);
+    const action = doc.newDictionary();
+    action.put("S", doc.newName("URI"));
+    action.put("URI", doc.newString(`mailto:${EMAIL}`));
+    item.put("A", action);
+    outlines.put("First", item);
+    outlines.put("Last", item);
+    outlines.put("Count", doc.newInteger(1));
+    root.put("Outlines", outlines);
+    return new Uint8Array(doc.saveToBuffer({}).asUint8Array()).buffer as ArrayBuffer;
+  }
+
+  it("strips a mailto: /A /URI on an OUTLINE item — the email is gone from the bytes", async () => {
+    const buf = await outlineUriPdf();
+    const { bytes } = await redactPdf(buf, anonymizeDeterministic);
+    // reason: mupdf's WASM surface is untyped.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mupdf = (await import("mupdf")) as any;
+    const doc = mupdf.PDFDocument.openDocument(bytes, "application/pdf");
+    const first = doc.getTrailer().get("Root").get("Outlines").get("First");
+    if (first && !(first.isNull?.() ?? false)) {
+      const a = first.get("A");
+      expect(a === null || (a.isNull?.() ?? false)).toBe(true);
+    }
+    const b = await layerB(bytes, [EMAIL]);
+    expect(b.pass).toBe(true);
+  });
+
+  /** A one-page PDF with a page-level /AA /O (on-open) JavaScript action whose script embeds PII. */
+  async function pageAaPdf(): Promise<ArrayBuffer> {
+    // reason: mupdf's WASM surface is untyped; narrowly used to author a crafted test PDF.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mupdf = (await import("mupdf")) as any;
+    const doc = new mupdf.PDFDocument();
+    const font = doc.addSimpleFont(new mupdf.Font("Helvetica"));
+    const fonts = doc.newDictionary();
+    fonts.put("F1", font);
+    const resources = doc.newDictionary();
+    resources.put("Font", fonts);
+    doc.insertPage(-1, doc.addPage([0, 0, 612, 792], 0, resources, "BT /F1 12 Tf 50 700 Td (open me) Tj ET"));
+    const pageObj = doc.loadPage(0).getObject();
+    const jsAction = doc.newDictionary();
+    jsAction.put("S", doc.newName("JavaScript"));
+    jsAction.put("JS", doc.newString(`app.alert("id ${JS_ID}");`));
+    const aa = doc.newDictionary();
+    aa.put("O", jsAction); // on page OPEN
+    pageObj.put("AA", aa);
+    return new Uint8Array(doc.saveToBuffer({}).asUint8Array()).buffer as ArrayBuffer;
+  }
+
+  it("strips page-level /AA /O JavaScript — the embedded PII is gone from the bytes", async () => {
+    const buf = await pageAaPdf();
+    const { bytes } = await redactPdf(buf, anonymizeDeterministic);
+    // reason: mupdf's WASM surface is untyped.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mupdf = (await import("mupdf")) as any;
+    const doc = mupdf.PDFDocument.openDocument(bytes, "application/pdf");
+    const aa = doc.getTrailer().get("Root").get("Pages").get("Kids").get(0).get("AA");
+    expect(aa === null || (aa.isNull?.() ?? false)).toBe(true);
+    const b = await layerB(bytes, [JS_ID]);
+    expect(b.pass).toBe(true);
   });
 });
 
