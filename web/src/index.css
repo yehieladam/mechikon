@@ -40,6 +40,29 @@ body {
   }
 }
 
+/* Highlighter marker that sweeps right-to-left (natural for Hebrew): the band is anchored to the
+   right edge and its width grows 0% -> 100%, so it paints leftward across the text. */
+.marker-highlight {
+  background-image: linear-gradient(
+    120deg,
+    rgba(250, 204, 21, 0.55) 0%,
+    rgba(250, 204, 21, 0.55) 100%
+  );
+  background-repeat: no-repeat;
+  background-position: right center;
+  background-size: 0% 62%;
+  animation: markerSweep 1.1s 0.45s ease-out forwards;
+  padding: 0 0.1em;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
+@keyframes markerSweep {
+  to {
+    background-size: 100% 62%;
+  }
+}
+
 /* Respect users who ask for less motion: neutralize the one fadeIn and any transitions/smooth scroll. */
 @media (prefers-reduced-motion: reduce) {
   *,
