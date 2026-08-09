@@ -11,7 +11,7 @@
  */
 import type { KeyRow } from "@engine/types";
 import { restore } from "@engine/restore";
-import { decodeXml, encodeXml, DOCX_PART } from "./officeRedact";
+import { createInflationBudget, decodeXml, encodeXml, DOCX_PART } from "./officeRedact";
 
 export interface RestoredFile {
   readonly bytes: Uint8Array;
@@ -20,14 +20,22 @@ export interface RestoredFile {
 }
 
 /** Restore a .docx by replacing placeholders with their originals inside each text run. */
-async function restoreDocx(buffer: ArrayBuffer, key: readonly KeyRow[]): Promise<RestoredFile> {
+async function restoreDocx(
+  buffer: ArrayBuffer,
+  key: readonly KeyRow[],
+  maxInflatedBytes?: number,
+): Promise<RestoredFile> {
   const JSZip = (await import("jszip")).default;
   const zip = await JSZip.loadAsync(buffer);
   const unmatched = new Set<string>();
+  // Zip-bomb bound (B8): the uploaded docx is untrusted — charge every inflated part against one
+  // cumulative ceiling (throws ZIP_BOMB over it) instead of inflating gigabytes into the tab.
+  const budget = createInflationBudget(maxInflatedBytes);
   const paths = Object.keys(zip.files).filter((name) => !zip.files[name].dir && DOCX_PART.test(name));
 
   for (const path of paths) {
     const content = await zip.files[path].async("string");
+    budget(content.length);
     const rewritten = content.replace(
       /(<w:t\b[^>]*>)([\s\S]*?)(<\/w:t>)/g,
       (_match, open: string, inner: string, close: string) => {
@@ -62,11 +70,12 @@ export async function restoreFile(
   fileName: string,
   buffer: ArrayBuffer,
   key: readonly KeyRow[],
+  maxInflatedBytes?: number,
 ): Promise<RestoredFile> {
   const ext = fileName.toLowerCase().split(".").pop() ?? "";
   switch (ext) {
     case "docx":
-      return restoreDocx(buffer, key);
+      return restoreDocx(buffer, key, maxInflatedBytes);
     case "txt":
       return restoreText(buffer, key);
     default:

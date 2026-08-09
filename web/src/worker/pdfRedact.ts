@@ -28,6 +28,7 @@ import {
   type FormFieldValue,
   type OutlineItem,
 } from "./pdfSanitize";
+import { assertPageCountWithinCap } from "./pdfLimits";
 
 // reason: mupdf's ESM/WASM surface (PDFDocument, PDFPage, StructuredText walker) is not worth
 // modelling in the type system; it is narrowly used here and behind a dynamic import.
@@ -101,6 +102,8 @@ export async function isScannedPdf(buffer: ArrayBuffer): Promise<boolean> {
   const mupdf: any = await import("mupdf");
   const doc = mupdf.PDFDocument.openDocument(new Uint8Array(buffer), "application/pdf");
   try {
+    // Page cap (B8) BEFORE the per-page walks below — classification itself is a full-document loop.
+    assertPageCountWithinCap(doc.countPages());
     const wholeDocNoText = mappedFromDoc(doc).text.replace(/\s/g, "").length < NO_TEXT_LAYER_MIN_CHARS;
     return wholeDocNoText || imageOnlyPageNumbers(doc).length > 0;
   } finally {
@@ -409,6 +412,8 @@ interface ProducedPdf {
 /** The doc-scoped body of redactPdf — everything that touches the open mupdf document. Split out so
  * the caller can destroy the document in one try/finally regardless of which path threw. */
 async function redactIntoBytes(mupdf: any, doc: any, anonymize: Anonymize): Promise<ProducedPdf> {
+  // Page cap (B8): refuse an absurd declared page count BEFORE the first full-document page walk.
+  assertPageCountWithinCap(doc.countPages());
   const mapped = mappedFromDoc(doc);
 
   // Refuse a PDF with NO usable text layer at all (a whole-document scan — there are no text pages to
