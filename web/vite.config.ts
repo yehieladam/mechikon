@@ -98,11 +98,13 @@ export default defineConfig({
     outDir: fileURLToPath(new URL("../dist-web", import.meta.url)),
     emptyOutDir: true,
     rollupOptions: {
-      // Multi-page: the app (index.html) + a self-contained static terms page (terms.html served at
-      // /terms.html). No router, no runtime cost to the app — terms.html ships no JS.
+      // Multi-page: the app (index.html) + self-contained static legal pages (terms.html at
+      // /terms.html, accessibility.html at /accessibility.html). No router, no runtime cost to the
+      // app — the static pages ship no JS.
       input: {
         main: resolve(fileURLToPath(new URL(".", import.meta.url)), "index.html"),
         terms: resolve(fileURLToPath(new URL(".", import.meta.url)), "terms.html"),
+        accessibility: resolve(fileURLToPath(new URL(".", import.meta.url)), "accessibility.html"),
       },
     },
   },
