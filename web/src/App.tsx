@@ -2130,7 +2130,6 @@ export function App() {
 
       <footer className="mx-auto mt-24 max-w-2xl px-6 pb-16 text-center text-xs leading-relaxed text-zinc-400">
         <p className="text-zinc-500">{t("trust.tagline")}</p>
-        <p className="mx-auto mt-3 max-w-xl">{t("legal.noCollection")}</p>
         <p className="mx-auto mt-3 max-w-xl">{t("legal.notAdvice")}</p>
         <p className="mx-auto mt-3 max-w-xl">{t("legal.asIs")}</p>
         <p className="mt-4">
