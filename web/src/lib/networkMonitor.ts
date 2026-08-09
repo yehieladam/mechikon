@@ -43,6 +43,12 @@ function urlString(value: unknown): string {
   return "";
 }
 
+function notify(): void {
+  for (const listener of listeners) {
+    listener();
+  }
+}
+
 function record(rawUrl: unknown): void {
   const url = urlString(rawUrl);
   const origin = typeof window !== "undefined" ? window.location.origin : "";
@@ -60,9 +66,37 @@ function record(rawUrl: unknown): void {
     unexpected: state.unexpected + (ok ? 0 : 1),
     unexpectedHost: state.unexpectedHost ?? host,
   };
-  for (const listener of listeners) {
-    listener();
+  notify();
+}
+
+/**
+ * Record a request that is unexpected BY DEFINITION, regardless of destination — used for WebRTC,
+ * which has no legitimate use in this app (no calls, no P2P). ICE/STUN/data channels reach hosts
+ * without ever touching fetch/XHR/WebSocket, so a peer connection is an exfiltration signal per se.
+ */
+function recordUnexpected(host: string): void {
+  state = {
+    count: state.count + 1,
+    unexpected: state.unexpected + 1,
+    unexpectedHost: state.unexpectedHost ?? host,
+  };
+  notify();
+}
+
+/** Best-effort name of the first ICE server host, so the badge can say WHERE the connection aimed. */
+function webRtcHost(configuration?: RTCConfiguration): string {
+  const servers = configuration?.iceServers ?? [];
+  for (const server of servers) {
+    const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
+    for (const url of urls) {
+      // stun:/turn: are non-special schemes — WHATWG URL leaves hostname empty, so parse by hand.
+      const match = /^(?:stun|stuns|turn|turns):([^:/?#]+)/i.exec(url);
+      if (match) {
+        return match[1];
+      }
+    }
   }
+  return "webrtc";
 }
 
 export function getNetworkState(): NetworkState {
@@ -86,33 +120,40 @@ export function installNetworkMonitor(): void {
   }
   installed = true;
 
-  const originalFetch = window.fetch.bind(window);
-  window.fetch = (...args: Parameters<typeof fetch>): Promise<Response> => {
-    record(args[0]);
-    return originalFetch(...args);
-  };
+  // Every patch below guards its global with `typeof X !== "undefined"` first. A missing global (SSR,
+  // node tests, an odd browser) must be a no-op, never a crash — installNetworkMonitor() must not throw
+  // just because, say, `navigator` or `XMLHttpRequest` is absent in the current realm.
+  if (typeof window.fetch === "function") {
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = (...args: Parameters<typeof fetch>): Promise<Response> => {
+      record(args[0]);
+      return originalFetch(...args);
+    };
+  }
 
-  // Bind to the 5-arg overload explicitly so `.call` below type-checks against the full signature.
-  const originalOpen: (
-    method: string,
-    url: string | URL,
-    async?: boolean,
-    username?: string | null,
-    password?: string | null,
-  ) => void = XMLHttpRequest.prototype.open;
-  XMLHttpRequest.prototype.open = function open(
-    this: XMLHttpRequest,
-    method: string,
-    url: string | URL,
-    isAsync: boolean = true,
-    username?: string | null,
-    password?: string | null,
-  ): void {
-    record(url);
-    return originalOpen.call(this, method, url, isAsync, username, password);
-  };
+  if (typeof XMLHttpRequest !== "undefined") {
+    // Bind to the 5-arg overload explicitly so `.call` below type-checks against the full signature.
+    const originalOpen: (
+      method: string,
+      url: string | URL,
+      async?: boolean,
+      username?: string | null,
+      password?: string | null,
+    ) => void = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function open(
+      this: XMLHttpRequest,
+      method: string,
+      url: string | URL,
+      isAsync: boolean = true,
+      username?: string | null,
+      password?: string | null,
+    ): void {
+      record(url);
+      return originalOpen.call(this, method, url, isAsync, username, password);
+    };
+  }
 
-  if (typeof navigator.sendBeacon === "function") {
+  if (typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function") {
     const originalBeacon = navigator.sendBeacon.bind(navigator);
     navigator.sendBeacon = (...args: Parameters<typeof navigator.sendBeacon>): boolean => {
       record(args[0]);
@@ -142,5 +183,24 @@ export function installNetworkMonitor(): void {
       }
     }
     window.EventSource = MonitoredEventSource as typeof EventSource;
+  }
+
+  // WebRTC: ICE/STUN/data channels can reach arbitrary hosts WITHOUT fetch/XHR/WebSocket, so an
+  // unpatched RTCPeerConnection would be a blind spot the badge never sees. This app has no WebRTC
+  // use at all, so ANY construction is classified UNEXPECTED (the CSP `webrtc 'block'` directive is
+  // the hard backstop; this is the honest-observation layer). The legacy webkit alias is patched too —
+  // Chrome still exposes it, and it would otherwise be a one-word bypass.
+  const rtcWindow = window as typeof window & { webkitRTCPeerConnection?: typeof RTCPeerConnection };
+  for (const key of ["RTCPeerConnection", "webkitRTCPeerConnection"] as const) {
+    const OriginalRtc = rtcWindow[key];
+    if (typeof OriginalRtc === "function") {
+      class MonitoredRTCPeerConnection extends OriginalRtc {
+        constructor(configuration?: RTCConfiguration) {
+          recordUnexpected(webRtcHost(configuration));
+          super(configuration);
+        }
+      }
+      rtcWindow[key] = MonitoredRTCPeerConnection as typeof RTCPeerConnection;
+    }
   }
 }

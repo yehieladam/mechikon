@@ -45,6 +45,9 @@ const CSP = [
   "worker-src 'self' blob:",
   // blob: — onnxruntime-web's threaded backend fetches its wasm / spawns workers via blob URLs.
   "connect-src 'self' blob: https://huggingface.co https://*.hf.co https://cdn.jsdelivr.net",
+  // WebRTC reaches hosts outside connect-src (ICE/STUN/data channels) — block it outright; the app
+  // has no WebRTC use. Belt to the monitor's RTCPeerConnection suspenders (lib/networkMonitor.ts).
+  "webrtc 'block'",
 ].join("; ");
 
 /**
@@ -56,6 +59,10 @@ function isolationHeaders(withCsp: boolean) {
   return (_req: IncomingMessage, res: ServerResponse, next: () => void): void => {
     res.setHeader("Cross-Origin-Opener-Policy", COOP);
     res.setHeader("Cross-Origin-Embedder-Policy", COEP);
+    // Defense in depth, mirrored in vercel.json: no MIME sniffing, and never leak the page URL in a
+    // Referer header (belt to the connect-src suspenders — even allowed hosts learn nothing).
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Referrer-Policy", "no-referrer");
     if (withCsp) {
       res.setHeader("Content-Security-Policy", CSP);
     }

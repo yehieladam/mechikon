@@ -37,4 +37,11 @@ describe("isAllowedRequest", () => {
     expect(isAllowedRequest("https://evil.com/collect", ORIGIN)).toBe(false);
     expect(isAllowedRequest("https://analytics.google.com/g", ORIGIN)).toBe(false);
   });
+  it("fails CLOSED on an unparseable URL — a crafted request must alarm, not slip through", () => {
+    // Junk with no usable base (the worker's origin can be "" when it has no location).
+    expect(isAllowedRequest("not a url", "")).toBe(false);
+    // Absolute-but-invalid URLs that throw even with a valid base.
+    expect(isAllowedRequest("https://", ORIGIN)).toBe(false);
+    expect(isAllowedRequest("http://exa mple.com/x", ORIGIN)).toBe(false);
+  });
 });
