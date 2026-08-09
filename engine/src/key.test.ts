@@ -65,3 +65,25 @@ describe("key.v1 JSON round-trip", () => {
     expect(() => fromKeyFile('"not an object"')).toThrow();
   });
 });
+
+describe("key.v1 untrusted-input bounds", () => {
+  const row = (i: number) => ({ placeholder: `[NAME_${i}]`, original: `v${i}`, type: "PERSON" });
+
+  it("rejects a key file with more rows than the cap (DoS bound)", () => {
+    const rows = Array.from({ length: 50_001 }, (_, i) => row(i));
+    expect(() => fromKeyFile(JSON.stringify({ version: "key.v1", rows }))).toThrow();
+  });
+
+  it("accepts a key file at exactly the row cap", () => {
+    const rows = Array.from({ length: 50_000 }, (_, i) => row(i));
+    expect(fromKeyFile(JSON.stringify({ version: "key.v1", rows }))).toHaveLength(50_000);
+  });
+
+  it("rejects a row whose placeholder or original exceeds the per-string cap", () => {
+    const long = "x".repeat(10_001);
+    const withOriginal = { version: "key.v1", rows: [{ placeholder: "[NAME_1]", original: long, type: "PERSON" }] };
+    const withPlaceholder = { version: "key.v1", rows: [{ placeholder: long, original: "v", type: "PERSON" }] };
+    expect(() => fromKeyFile(JSON.stringify(withOriginal))).toThrow();
+    expect(() => fromKeyFile(JSON.stringify(withPlaceholder))).toThrow();
+  });
+});

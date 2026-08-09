@@ -9,6 +9,14 @@ import type { EntityType, KeyRow } from "./types";
 
 const CSV_HEADER = "placeholder,original,type";
 const KEY_VERSION = "key.v1";
+/**
+ * Untrusted-input bounds for an UPLOADED key file: a real key has at most a few thousand rows (one per
+ * distinct PII value in one document) with short values, while a hostile file can carry millions of
+ * rows / megabyte strings that later feed UI regex construction (App highlightValues). Reject over the
+ * cap rather than truncate — a silently truncated key would restore incompletely.
+ */
+const MAX_KEY_ROWS = 50_000;
+const MAX_KEY_FIELD_CHARS = 10_000;
 
 export interface KeyFile {
   readonly version: typeof KEY_VERSION;
@@ -127,9 +135,16 @@ export function fromKeyFile(json: string): KeyRow[] {
   ) {
     throw new Error("Unrecognized key file (expected version key.v1).");
   }
-  return (parsed as { rows: KeyRow[] }).rows.map((r) => ({
-    placeholder: String(r.placeholder),
-    original: String(r.original),
-    type: r.type,
-  }));
+  const rawRows = (parsed as { rows: KeyRow[] }).rows;
+  if (rawRows.length > MAX_KEY_ROWS) {
+    throw new Error(`Key file exceeds the row cap (${MAX_KEY_ROWS}).`);
+  }
+  return rawRows.map((r) => {
+    const placeholder = String(r.placeholder);
+    const original = String(r.original);
+    if (placeholder.length > MAX_KEY_FIELD_CHARS || original.length > MAX_KEY_FIELD_CHARS) {
+      throw new Error("Key file row exceeds the per-field length cap.");
+    }
+    return { placeholder, original, type: r.type };
+  });
 }

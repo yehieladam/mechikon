@@ -135,6 +135,19 @@ describe("keyCrypto — untrusted-envelope hardening (M2)", () => {
     expect(isEncryptedKeyFile({ version: "key.v1" })).toBe(false);
   });
 
+  it("rejects an envelope whose salt / nonce / ciphertext strings exceed the size caps", async () => {
+    const base = await validEnvelope();
+    // Our own envelopes are tiny (16-byte salt, 12-byte nonce); a hostile file can carry megabytes in
+    // any string field. base64(16 bytes)=24 chars, so 64 / 32 are generous caps; ciphertext is bounded
+    // to the base64 of a ~10MB key (far above any real key, far below an allocation-bomb).
+    expect(isEncryptedKeyFile({ ...base, kdf: { ...base.kdf, salt: "A".repeat(65) } })).toBe(false);
+    expect(isEncryptedKeyFile({ ...base, nonce: "A".repeat(33) })).toBe(false);
+    expect(isEncryptedKeyFile({ ...base, ciphertext: "A".repeat(14_000_001) })).toBe(false);
+    await expect(
+      decryptKeyRows(asEnvelope({ ...base, kdf: { ...base.kdf, salt: "A".repeat(65) } }), "pw"),
+    ).rejects.toThrow(INVALID_KEY_FILE);
+  });
+
   it("accepts the iteration boundaries and rejects just outside them", async () => {
     const base = await validEnvelope();
     const withIter = (n: number) => ({ ...base, kdf: { ...base.kdf, iterations: n } });

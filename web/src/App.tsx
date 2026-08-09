@@ -15,6 +15,7 @@ import {
 import { getEngine } from "./worker/engineClient";
 import { useNetwork } from "./lib/useNetworkCount";
 import { mimeFor } from "./lib/mime";
+import { exceedsKeyFileLimit } from "./lib/uploadLimits";
 import { isScanOcrEnabled } from "./lib/scanFlag";
 import { scanNoticeFor } from "./lib/scanNotice";
 import { loadNer, useNer } from "./worker/nerController";
@@ -780,6 +781,12 @@ export function App() {
     }
     setKeyError(null);
     setPendingEnc(null);
+    // Size gate BEFORE reading: a real key file is at most a few hundred KB; refusing an oversized one
+    // here means a hostile multi-GB upload is never read into memory at all.
+    if (exceedsKeyFileLimit(file.size)) {
+      setKeyError("invalid");
+      return;
+    }
     try {
       const text = await file.text();
       const parsed: unknown = JSON.parse(text);
