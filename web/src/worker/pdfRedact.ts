@@ -139,7 +139,11 @@ function mappedFromDoc(doc: any): MappedText {
 export async function extractPdfMapped(buffer: ArrayBuffer): Promise<MappedText> {
   const mupdf: any = await import("mupdf");
   const doc = mupdf.PDFDocument.openDocument(new Uint8Array(buffer), "application/pdf");
-  return mappedFromDoc(doc);
+  try {
+    return mappedFromDoc(doc); // plain JS output (chars + copied quads) — safe to outlive the doc
+  } finally {
+    doc.destroy(); // WASM heap is not GC'd; an undestroyed doc leaks its parsed tree per call
+  }
 }
 
 /** Read every metadata channel's text (Info values, outline titles, form field values, annotation
@@ -203,8 +207,14 @@ async function selfVerify(bytes: Uint8Array, rows: readonly KeyRow[]): Promise<V
   }
   const mupdf: any = await import("mupdf");
   const doc = mupdf.PDFDocument.openDocument(bytes, "application/pdf");
-  const bodyText = mappedFromDoc(doc).text;
-  const metaText = readMetadataChannels(doc);
+  let bodyText: string;
+  let metaText: string;
+  try {
+    bodyText = mappedFromDoc(doc).text;
+    metaText = readMetadataChannels(doc);
+  } finally {
+    doc.destroy(); // layers B/C below are pure byte work — the verify doc is no longer needed
+  }
   // Layer A: whole-word for names (a short name inside a longer legit word is NOT a leak — the false
   // positive that threw away correctly-redacted files), digit-bounded for numerics. See engine/pdfVerify.
   const layerAHits = textLeaks(bodyText, metaText, needles);
@@ -346,6 +356,44 @@ function burnTokens(doc: any, mupdf: any, rects: readonly TokenRect[]): void {
 export async function redactPdf(buffer: ArrayBuffer, anonymize: Anonymize): Promise<RedactedFile> {
   const mupdf: any = await import("mupdf");
   const doc = mupdf.PDFDocument.openDocument(new Uint8Array(buffer), "application/pdf");
+  let produced: ProducedPdf;
+  try {
+    produced = await redactIntoBytes(mupdf, doc, anonymize);
+  } finally {
+    // WASM heap is not GC'd — release the (multi-MB) parsed document on every path, including the
+    // NO_TEXT_LAYER / TEXT_SELFVERIFY_FAILED throws, BEFORE the verify pass opens its own document.
+    // Only JS-owned copies escape redactIntoBytes (never a live WASM view), so this is safe.
+    doc.destroy();
+  }
+  const { result, bytes, unverifiedImagePages } = produced;
+  // VISUAL self-verify: gates only whether we can CERTIFY the redacted PDF clean. On failure we no longer
+  // withhold the file — the owner reviews the preview and can add missed terms — but we surface a warning
+  // (pdfUnverified) so the download is an INFORMED choice, not a blind one. The warning is SOFT and
+  // HIGH-CONFIDENCE only (B2): it fires when a structured value or a full multi-token name surface
+  // genuinely survived, never on a short fragment's coincidental substring match (the #90 noise). The
+  // Word deliverable is already hard-verified. layerB/layerC (byte + structure) still ran inside
+  // selfVerify.
+  const verify = await selfVerify(bytes, result.key);
+  const pdfUnverified =
+    verify.terms.length > 0 ? { reason: verify.detail, terms: verify.terms } : undefined;
+  return {
+    bytes,
+    result,
+    ...(pdfUnverified ? { pdfUnverified } : {}),
+    ...(unverifiedImagePages.length > 0 ? { unverifiedImagePages } : {}),
+  };
+}
+
+/** What the doc-scoped redaction pass hands back: JS-owned bytes + the detection result. */
+interface ProducedPdf {
+  readonly result: AnonymizeResult;
+  readonly bytes: Uint8Array;
+  readonly unverifiedImagePages: number[];
+}
+
+/** The doc-scoped body of redactPdf — everything that touches the open mupdf document. Split out so
+ * the caller can destroy the document in one try/finally regardless of which path threw. */
+async function redactIntoBytes(mupdf: any, doc: any, anonymize: Anonymize): Promise<ProducedPdf> {
   const mapped = mappedFromDoc(doc);
 
   // Refuse a PDF with NO usable text layer at all (a whole-document scan — there are no text pages to
@@ -458,24 +506,9 @@ export async function redactPdf(buffer: ArrayBuffer, anonymize: Anonymize): Prom
   // were already anonymized above through the unified key.
   sanitizeMetadata(doc);
 
-  // asUint8Array() is a live view into WASM memory — the self-verify below re-opens mupdf and would
-  // clobber it. Copy into a JS-owned buffer immediately.
+  // asUint8Array() is a live view into WASM memory — the caller destroys this document and the
+  // self-verify re-opens mupdf, either of which would clobber it. Copy into a JS-owned buffer now.
   const bytes = new Uint8Array(doc.saveToBuffer(SAFE_SAVE_OPTIONS).asUint8Array());
-  // VISUAL self-verify: gates only whether we can CERTIFY the redacted PDF clean. On failure we no longer
-  // withhold the file — the owner reviews the preview and can add missed terms — but we surface a warning
-  // (pdfUnverified) so the download is an INFORMED choice, not a blind one. The warning is SOFT and
-  // HIGH-CONFIDENCE only (B2): it fires when a structured value or a full multi-token name surface
-  // genuinely survived, never on a short fragment's coincidental substring match (the #90 noise). The
-  // Word deliverable above is already hard-verified. layerB/layerC (byte + structure) still ran inside
-  // selfVerify.
-  const verify = await selfVerify(bytes, result.key);
-  const pdfUnverified =
-    verify.terms.length > 0 ? { reason: verify.detail, terms: verify.terms } : undefined;
-  return {
-    bytes,
-    result,
-    ...(pdfUnverified ? { pdfUnverified } : {}),
-    ...(unverifiedImagePages.length > 0 ? { unverifiedImagePages } : {}),
-  };
+  return { result, bytes, unverifiedImagePages };
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
