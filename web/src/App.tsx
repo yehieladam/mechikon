@@ -2075,7 +2075,18 @@ export function App() {
       </main>
 
       <footer className="mx-auto mt-24 max-w-2xl px-6 pb-16 text-center text-xs leading-relaxed text-zinc-400">
-        <p className="text-zinc-500">{t("trust.tagline")}</p>
+        <p className="text-sm text-zinc-600">
+          {t("contact.lawyersCta")}{" "}
+          <a
+            href="https://www.bai-solutions.com/#contact"
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex min-h-[44px] items-center font-semibold text-ink underline decoration-zinc-300 underline-offset-4 transition hover:decoration-ink"
+          >
+            {t("contact.link")}
+          </a>
+        </p>
+        <p className="mt-6 text-zinc-500">{t("trust.tagline")}</p>
         <p className="mx-auto mt-3 max-w-xl">{t("legal.notAdvice")}</p>
         <p className="mx-auto mt-3 max-w-xl">{t("legal.asIs")}</p>
         <p className="mt-4">
