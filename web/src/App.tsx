@@ -1006,19 +1006,6 @@ export function App() {
           ? t("input.fileError")
           : t("input.uploadHint");
 
-  const steps = [
-    { title: t("flow.step1.title"), desc: t("flow.step1.desc") },
-    { title: t("flow.step2.title"), desc: t("flow.step2.desc") },
-    { title: t("flow.step3.title"), desc: t("flow.step3.desc") },
-    { title: t("flow.step4.title"), desc: t("flow.step4.desc") },
-  ];
-
-  const trustItems = [
-    { key: "noSignup", d: "M12 3l7 3v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3z" },
-    { key: "offline", d: "M4 4l16 16M8.5 8.6A9 9 0 0 0 5 12m14 0a9 9 0 0 0-3.2-4M12 20h.01" },
-    { key: "openSource", d: "M9 18l-6-6 6-6m6 12l6-6-6-6" },
-  ] as const;
-
   const faqItems = ["security", "workflow", "key", "detection", "cost"] as const;
 
   return (
@@ -1052,7 +1039,7 @@ export function App() {
             unexpected > 0 ? "text-red-600" : net.count === 0 ? "text-emerald-700" : "text-zinc-400";
           return (
             <a
-              href="#privacy"
+              href="#faq"
               className={`inline-flex min-h-[44px] max-w-full items-center gap-1.5 rounded text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/20 ${tone}`}
               aria-live="polite"
             >
@@ -2052,57 +2039,7 @@ export function App() {
           </details>
         </section>
 
-        <section className="mt-24">
-          <h2 className="text-center text-xs font-semibold uppercase tracking-[0.15em] text-zinc-400">
-            {t("flow.heading")}
-          </h2>
-          <ol className="mt-8 grid gap-4 sm:grid-cols-4">
-            {steps.map((step, index) => (
-              <li
-                key={step.title}
-                className="rounded-2xl border border-hairline bg-white p-5 transition hover:border-zinc-300"
-              >
-                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-ink text-xs font-semibold tabular-nums text-white">
-                  {index + 1}
-                </div>
-                <div className="mt-3 text-[15px] font-semibold leading-snug">{step.title}</div>
-                <div className="mt-1.5 text-[13px] leading-relaxed text-zinc-500">{step.desc}</div>
-              </li>
-            ))}
-          </ol>
-        </section>
-
-        <section id="privacy" className="mt-16 scroll-mt-6 rounded-3xl bg-surface px-6 py-10 sm:px-10">
-          <h2 className="text-center text-lg font-semibold tracking-tight">{t("trust.heading")}</h2>
-          <p className="mx-auto mt-2 max-w-md text-center text-[13px] leading-relaxed text-zinc-500">
-            {t("trust.subheading")}
-          </p>
-          <div className="mt-8 grid gap-8 sm:grid-cols-3">
-            {trustItems.map((item) => (
-              <div key={item.key} className="text-center sm:text-right">
-                <div className="mx-auto flex h-9 w-9 items-center justify-center rounded-xl bg-white shadow-sm sm:mx-0">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                    <path
-                      d={item.d}
-                      stroke="currentColor"
-                      strokeWidth="1.7"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
-                </div>
-                <div className="mt-3 text-[15px] font-semibold">
-                  {t(`trust.items.${item.key}.title`)}
-                </div>
-                <div className="mt-1.5 text-[13px] leading-relaxed text-zinc-500">
-                  {t(`trust.items.${item.key}.text`)}
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        <section id="faq" className="mx-auto mt-16 max-w-2xl scroll-mt-6 px-1">
+        <section id="faq" className="mx-auto mt-24 max-w-2xl scroll-mt-6 px-1">
           <h2 className="text-center text-lg font-semibold tracking-tight">{t("faq.heading")}</h2>
           <div className="mt-6 space-y-3">
             {faqItems.map((key) => (
