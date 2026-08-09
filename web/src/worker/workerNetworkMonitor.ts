@@ -39,6 +39,18 @@ function urlOf(input: RequestInfo | URL): string {
   return input.url;
 }
 
+/** Request method for classification: init.method wins (fetch semantics), then a Request object's
+ *  method, else GET (a bare fetch is a GET). Non-GET to a model host = exfiltration signal (B5). */
+function methodOf(input: RequestInfo | URL, init?: RequestInit): string {
+  if (typeof init?.method === "string" && init.method !== "") {
+    return init.method;
+  }
+  if (typeof input === "object" && "method" in input && typeof input.method === "string") {
+    return input.method;
+  }
+  return "GET";
+}
+
 /** Patch `self.fetch` to count + classify worker requests and notify the listener. Call first thing. */
 export function installWorkerNetworkMonitor(): void {
   const scope = globalThis as typeof globalThis & MonitoredGlobal;
@@ -51,7 +63,7 @@ export function installWorkerNetworkMonitor(): void {
   const originalFetch = scope.fetch.bind(scope);
   scope.fetch = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = urlOf(input);
-    if (isAllowedRequest(url, origin)) {
+    if (isAllowedRequest(url, origin, methodOf(input, init))) {
       report = { ...report, ok: report.ok + 1 };
     } else {
       let host: string | null = null;

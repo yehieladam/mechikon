@@ -37,6 +37,21 @@ describe("isAllowedRequest", () => {
     expect(isAllowedRequest("https://evil.com/collect", ORIGIN)).toBe(false);
     expect(isAllowedRequest("https://analytics.google.com/g", ORIGIN)).toBe(false);
   });
+  it("flags a non-GET request to a model host — the model path is read-only, a write is exfiltration", () => {
+    const modelFile = "https://huggingface.co/onnx-community/x/resolve/main/config.json";
+    expect(isAllowedRequest(modelFile, ORIGIN, "POST")).toBe(false);
+    expect(isAllowedRequest(modelFile, ORIGIN, "post")).toBe(false); // fetch init.method may be lowercase
+    expect(isAllowedRequest("https://us.aws.cdn.hf.co/blob", ORIGIN, "PUT")).toBe(false);
+    expect(isAllowedRequest("https://cdn.jsdelivr.net/npm/x", ORIGIN, "DELETE")).toBe(false);
+  });
+  it("keeps GET model fetches allowed (explicit and default method)", () => {
+    const modelFile = "https://huggingface.co/onnx-community/x/resolve/main/config.json";
+    expect(isAllowedRequest(modelFile, ORIGIN, "GET")).toBe(true);
+    expect(isAllowedRequest(modelFile, ORIGIN)).toBe(true); // method omitted defaults to GET
+  });
+  it("does not method-gate same-origin requests (they never leave the device)", () => {
+    expect(isAllowedRequest(`${ORIGIN}/api/local`, ORIGIN, "POST")).toBe(true);
+  });
   it("fails CLOSED on an unparseable URL — a crafted request must alarm, not slip through", () => {
     // Junk with no usable base (the worker's origin can be "" when it has no location).
     expect(isAllowedRequest("not a url", "")).toBe(false);
