@@ -79,6 +79,28 @@ describe("key.v1 untrusted-input bounds", () => {
     expect(fromKeyFile(JSON.stringify({ version: "key.v1", rows }))).toHaveLength(50_000);
   });
 
+  it("normalizes an unknown row type to MANUAL instead of passing it through (JSON)", () => {
+    // The type never affects restore (placeholder -> original), so normalizing keeps the row usable
+    // while a hostile/corrupt type string ("__proto__", a 1MB blob, an object) never propagates.
+    const json = JSON.stringify({
+      version: "key.v1",
+      rows: [
+        { placeholder: "[X_1]", original: "v1", type: "EVIL_TYPE" },
+        { placeholder: "[X_2]", original: "v2", type: 42 },
+        { placeholder: "[X_3]", original: "v3" }, // missing type
+        { placeholder: "[ID_1]", original: "123456709", type: "ISRAELI_ID" }, // valid — kept
+      ],
+    });
+    const rows = fromKeyFile(json);
+    expect(rows.map((r) => r.type)).toEqual(["MANUAL", "MANUAL", "MANUAL", "ISRAELI_ID"]);
+    expect(rows.map((r) => r.original)).toEqual(["v1", "v2", "v3", "123456709"]); // no row dropped
+  });
+
+  it("normalizes an unknown row type to MANUAL (CSV)", () => {
+    const csv = "placeholder,original,type\r\n[X_1],v1,BOGUS\r\n[NAME_1],v2,PERSON";
+    expect(fromCsv(csv).map((r) => r.type)).toEqual(["MANUAL", "PERSON"]);
+  });
+
   it("rejects a row whose placeholder or original exceeds the per-string cap", () => {
     const long = "x".repeat(10_001);
     const withOriginal = { version: "key.v1", rows: [{ placeholder: "[NAME_1]", original: long, type: "PERSON" }] };
