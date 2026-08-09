@@ -16,16 +16,18 @@ export function isModelHost(host: string): boolean {
 }
 
 /**
- * True when a request URL is allowed: same-origin, or an allowed model host. An unparseable URL is
- * treated as allowed (we never want a parsing quirk to raise a false exfiltration alarm — the CSP is
- * the hard backstop; this is the honest-observation layer).
+ * True when a request URL is allowed: same-origin, an allowed model host, or in-memory blob:/data:
+ * (onnxruntime-web's threaded backend fetches its wasm and worker bootstrap via blob: URLs — CSP
+ * `connect-src blob:` mirrors this). An UNPARSEABLE URL fails CLOSED: we cannot prove where it aims,
+ * so it counts as unexpected. A crafted/odd URL must alarm, not slip through — a false alarm is
+ * recoverable; a silent exfiltration path is not (the CSP remains the hard backstop either way).
  */
 export function isAllowedRequest(url: string, origin: string): boolean {
   let parsed: URL;
   try {
     parsed = new URL(url, origin);
   } catch {
-    return true;
+    return false;
   }
   if (parsed.protocol === "blob:" || parsed.protocol === "data:") {
     return true; // in-memory, never leaves the device
