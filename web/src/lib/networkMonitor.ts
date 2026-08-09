@@ -120,33 +120,40 @@ export function installNetworkMonitor(): void {
   }
   installed = true;
 
-  const originalFetch = window.fetch.bind(window);
-  window.fetch = (...args: Parameters<typeof fetch>): Promise<Response> => {
-    record(args[0]);
-    return originalFetch(...args);
-  };
+  // Every patch below guards its global with `typeof X !== "undefined"` first. A missing global (SSR,
+  // node tests, an odd browser) must be a no-op, never a crash — installNetworkMonitor() must not throw
+  // just because, say, `navigator` or `XMLHttpRequest` is absent in the current realm.
+  if (typeof window.fetch === "function") {
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = (...args: Parameters<typeof fetch>): Promise<Response> => {
+      record(args[0]);
+      return originalFetch(...args);
+    };
+  }
 
-  // Bind to the 5-arg overload explicitly so `.call` below type-checks against the full signature.
-  const originalOpen: (
-    method: string,
-    url: string | URL,
-    async?: boolean,
-    username?: string | null,
-    password?: string | null,
-  ) => void = XMLHttpRequest.prototype.open;
-  XMLHttpRequest.prototype.open = function open(
-    this: XMLHttpRequest,
-    method: string,
-    url: string | URL,
-    isAsync: boolean = true,
-    username?: string | null,
-    password?: string | null,
-  ): void {
-    record(url);
-    return originalOpen.call(this, method, url, isAsync, username, password);
-  };
+  if (typeof XMLHttpRequest !== "undefined") {
+    // Bind to the 5-arg overload explicitly so `.call` below type-checks against the full signature.
+    const originalOpen: (
+      method: string,
+      url: string | URL,
+      async?: boolean,
+      username?: string | null,
+      password?: string | null,
+    ) => void = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function open(
+      this: XMLHttpRequest,
+      method: string,
+      url: string | URL,
+      isAsync: boolean = true,
+      username?: string | null,
+      password?: string | null,
+    ): void {
+      record(url);
+      return originalOpen.call(this, method, url, isAsync, username, password);
+    };
+  }
 
-  if (typeof navigator.sendBeacon === "function") {
+  if (typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function") {
     const originalBeacon = navigator.sendBeacon.bind(navigator);
     navigator.sendBeacon = (...args: Parameters<typeof navigator.sendBeacon>): boolean => {
       record(args[0]);

