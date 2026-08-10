@@ -55,6 +55,16 @@ describe("restoreFile — docx round-trip", () => {
     expect(new TextDecoder().decode(restored.bytes)).toContain("123456709");
   });
 
+  it("restores a .csv file (same plain-text path as .txt)", async () => {
+    const { result } = await redactDocx(await buildDocx(), anonymizeDeterministic);
+    const buffer = new TextEncoder().encode("שורה,[ID_1],[PHONE_1]").buffer;
+    const restored = await restoreFile("data.csv", buffer, result.key);
+    const text = new TextDecoder().decode(restored.bytes);
+    expect(text).toContain("123456709");
+    expect(text).toContain("052-1234567");
+    expect(restored.unmatched).toHaveLength(0);
+  });
+
   it("throws RESTORE_UNSUPPORTED for an unsupported type (e.g. pdf)", async () => {
     await expect(restoreFile("x.pdf", new ArrayBuffer(4), [])).rejects.toThrow(RESTORE_UNSUPPORTED);
   });
