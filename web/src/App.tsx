@@ -2016,7 +2016,7 @@ export function App() {
                     {t("restoreFile.upload")}
                     <input
                       type="file"
-                      accept=".docx,.txt"
+                      accept=".docx,.xlsx,.txt"
                       className="hidden"
                       onChange={(event) => {
                         void onRestoreFile(event.target.files?.[0]);
