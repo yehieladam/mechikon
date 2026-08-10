@@ -102,6 +102,18 @@ describe("restoreFile — split-run reassembly", () => {
     expect(xml).toContain(`<w:t xml:space="preserve">עולם</w:t>`);
   });
 
+  it("reports a split placeholder as unmatched when its key is missing (never silently drops)", async () => {
+    // [ID_1] split across two runs, but restore with an EMPTY key — the reassembled token has no
+    // mapping. It must surface in `unmatched` (not be silently dropped) and stay put in the output.
+    const body = `<w:p><w:r><w:t xml:space="preserve">מספר [ID_</w:t></w:r><w:r><w:t xml:space="preserve">1] כאן</w:t></w:r></w:p>`;
+    const restored = await restoreFile("ai.docx", await docxWithBody(body), []);
+    const doc = await JSZip.loadAsync(restored.bytes);
+    const xml = await doc.file("word/document.xml")!.async("string");
+
+    expect(restored.unmatched).toContain("[ID_1]");
+    expect(xml).toContain("[ID_"); // fragments remain — nothing was fabricated
+  });
+
   it("reassembles a placeholder split across two rich-text runs in a shared string", async () => {
     const { result } = await redactXlsx(await buildXlsx(), anonymizeDeterministic);
     // The phone key is [PHONE_1] -> 052-1234567. Stage a shared string with the token split across runs.
