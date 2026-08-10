@@ -55,8 +55,8 @@ function restoreTextNodes(
  * blank the rest. Groups with nothing to reassemble are returned byte-for-byte, so run formatting is
  * preserved everywhere except the paragraphs/cells that actually carried a split token.
  */
-function reassembleGroup(group: string, tag: string, key: readonly KeyRow[], unmatched: Set<string>): string {
-  const nodeRegex = new RegExp(`(<${tag}\\b[^>]*>)([\\s\\S]*?)(</${tag}>)`, "g");
+function reassembleGroup(group: string, nodeRegex: RegExp, key: readonly KeyRow[], unmatched: Set<string>): string {
+  nodeRegex.lastIndex = 0; // shared across groups — reset before the exec walk
   const inners: string[] = [];
   for (let match = nodeRegex.exec(group); match !== null; match = nodeRegex.exec(group)) {
     inners.push(decodeXml(match[2]));
@@ -66,11 +66,14 @@ function reassembleGroup(group: string, tag: string, key: readonly KeyRow[], unm
   }
   const concat = inners.join("");
   const result = restore(concat, key);
-  if (result.restoredText === concat) {
-    return group; // no token spanned the node boundary — leave formatting untouched
-  }
+  // Report unmatched BEFORE the no-change early return: a split token whose key is missing leaves the
+  // text unchanged (restoredText === concat) yet is still unmatched, and the per-node pass never saw it
+  // (neither fragment is a whole token) — dropping it here would silently under-report (never do that).
   for (const token of result.unmatched) {
     unmatched.add(token);
+  }
+  if (result.restoredText === concat) {
+    return group; // no token spanned the node boundary — leave formatting untouched
   }
   let index = 0;
   return group.replace(nodeRegex, (_match, open: string, _inner: string, close: string) => {
@@ -89,8 +92,10 @@ interface GroupSpec {
 /** Pass 2: run reassembleGroup over every `groupTag` container in the part (handles AI-split tokens). */
 function reassembleSplitTokens(content: string, spec: GroupSpec, key: readonly KeyRow[], unmatched: Set<string>): string {
   // groupTag containers (w:p / si / c) are never nested in their own kind, so a non-greedy match is safe.
+  // Both regexes are compiled ONCE here and reused across every group in the part (not per group).
   const groupRegex = new RegExp(`<${spec.groupTag}\\b[^>]*>[\\s\\S]*?</${spec.groupTag}>`, "g");
-  return content.replace(groupRegex, (group) => reassembleGroup(group, spec.tag, key, unmatched));
+  const nodeRegex = new RegExp(`(<${spec.tag}\\b[^>]*>)([\\s\\S]*?)(</${spec.tag}>)`, "g");
+  return content.replace(groupRegex, (group) => reassembleGroup(group, nodeRegex, key, unmatched));
 }
 
 /**
