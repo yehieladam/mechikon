@@ -70,6 +70,58 @@ describe("restoreFile — docx round-trip", () => {
   });
 });
 
+/** Build a docx whose body XML is exactly `bodyXml` (raw runs), to stage AI-mangled output. */
+async function docxWithBody(bodyXml: string): Promise<ArrayBuffer> {
+  const document = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${bodyXml}</w:body></w:document>`;
+  const zip = new JSZip();
+  zip.file("[Content_Types].xml", "<Types/>");
+  zip.file("word/document.xml", document);
+  return zip.generateAsync({ type: "arraybuffer" });
+}
+
+describe("restoreFile — split-run reassembly", () => {
+  it("reassembles a placeholder an AI split across two docx runs", async () => {
+    // Get a real key ([ID_1] -> 123456709) by redacting a normal docx.
+    const { result } = await redactDocx(await buildDocx(), anonymizeDeterministic);
+
+    // Stage a returned docx where the AI split [ID_1] across two <w:t> runs, and left a second,
+    // untouched paragraph with two runs (must keep BOTH runs — formatting preserved).
+    const body =
+      `<w:p><w:r><w:t xml:space="preserve">מספר [ID_</w:t></w:r><w:r><w:t xml:space="preserve">1] כאן</w:t></w:r></w:p>` +
+      `<w:p><w:r><w:t xml:space="preserve">שלום </w:t></w:r><w:r><w:t xml:space="preserve">עולם</w:t></w:r></w:p>`;
+    const restored = await restoreFile("ai.docx", await docxWithBody(body), result.key);
+    const doc = await JSZip.loadAsync(restored.bytes);
+    const xml = await doc.file("word/document.xml")!.async("string");
+
+    expect(xml).toContain("123456709");
+    expect(xml).not.toContain("[ID_1]");
+    expect(restored.unmatched).toHaveLength(0);
+    // The untouched paragraph keeps its two separate runs (reassembly only collapses split-token groups).
+    expect((xml.match(/שלום/g) ?? []).length).toBe(1);
+    expect(xml).toContain(`<w:t xml:space="preserve">עולם</w:t>`);
+  });
+
+  it("reassembles a placeholder split across two rich-text runs in a shared string", async () => {
+    const { result } = await redactXlsx(await buildXlsx(), anonymizeDeterministic);
+    // The phone key is [PHONE_1] -> 052-1234567. Stage a shared string with the token split across runs.
+    const sharedStrings = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><si><r><t xml:space="preserve">טל [PHONE</t></r><r><t xml:space="preserve">_1] סוף</t></r></si></sst>`;
+    const zip = new JSZip();
+    zip.file("[Content_Types].xml", "<Types/>");
+    zip.file("xl/sharedStrings.xml", sharedStrings);
+    zip.file("xl/worksheets/sheet1.xml", `<worksheet><sheetData><row><c r="A1" t="s"><v>0</v></c></row></sheetData></worksheet>`);
+    const buffer = (await zip.generateAsync({ type: "arraybuffer" })) as ArrayBuffer;
+
+    const restored = await restoreFile("ai.xlsx", buffer, result.key);
+    const doc = await JSZip.loadAsync(restored.bytes);
+    const shared = await doc.file("xl/sharedStrings.xml")!.async("string");
+    expect(shared).toContain("052-1234567");
+    expect(shared).not.toContain("[PHONE_1]");
+    expect(restored.unmatched).toHaveLength(0);
+  });
+});
+
 /**
  * A minimal multi-sheet .xlsx: sheet1 carries a phone via the shared-string table (`<si><t>`), sheet2
  * carries an Israeli ID typed as a NUMBER (`<c><v>…</v></c>`) — the two forms redaction rewrites
