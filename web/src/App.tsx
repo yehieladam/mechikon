@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { track } from "@vercel/analytics";
 import * as Comlink from "comlink";
 import type { AnonymizeResult, EntityType, KeyRow } from "@engine/types";
 import type { ManualTerm } from "@engine/manual";
@@ -25,6 +26,7 @@ import {
 import { useNetwork } from "./lib/useNetworkCount";
 import { isLeavingDropZone } from "./lib/dragDepth";
 import { mimeFor } from "./lib/mime";
+import { redactFormat } from "./lib/redactFormat";
 import { exceedsKeyFileLimit, exceedsUploadLimit } from "./lib/uploadLimits";
 import { isScanOcrEnabled } from "./lib/scanFlag";
 import { scanNoticeFor } from "./lib/scanNotice";
@@ -376,6 +378,20 @@ export function App() {
 
   const busy = status !== null;
 
+  // Anonymous usage analytics: count ONE `file_redacted` event per user-initiated redaction, never per
+  // re-run. Each entry point (paste, upload) bumps docTokenRef; trackRedaction fires at most once per
+  // token, so adding a manual term or the NER-upgrade re-running the same document does not double-count.
+  // The payload is a coarse format bucket only (redactFormat) — no content, no filename.
+  const docTokenRef = useRef(0);
+  const trackedTokenRef = useRef(-1);
+  const trackRedaction = useCallback((format: string) => {
+    if (trackedTokenRef.current === docTokenRef.current) {
+      return;
+    }
+    trackedTokenRef.current = docTokenRef.current;
+    track("file_redacted", { format });
+  }, []);
+
   const showResult = useCallback((anonymized: AnonymizeResult, isNewDocument = false) => {
     setResult(anonymized);
     // The restore box starts EMPTY (guided flow): the user pastes the AI's answer, not the just-redacted
@@ -414,6 +430,7 @@ export function App() {
     if (text.length === 0 || busy) {
       return;
     }
+    docTokenRef.current += 1; // a fresh user-initiated redaction — arm one analytics event for it
     setStatus("working");
     setFileError(false);
     setSource({ kind: "text", text });
@@ -433,13 +450,14 @@ export function App() {
         ),
         true,
       );
+      trackRedaction("text");
       if (!manualOnlyRef.current) {
         void loadNer();
       }
     } finally {
       setStatus(null);
     }
-  }, [input, busy, showResult]);
+  }, [input, busy, showResult, trackRedaction]);
 
   // The single OCR pass for a scanned PDF (Stage 5). Runs ONLY once NER is ready (names come from NER on
   // the OCR text) so there is no wasted deterministic-only pass; per-page progress streams from the
@@ -474,6 +492,7 @@ export function App() {
         );
         if (isCancelled?.()) return; // source changed / unmounted during the multi-second OCR
         showResult(result, isNewDocument);
+        trackRedaction("scan"); // dedupe by token: the deferred + reprocess re-runs share the upload's token
         if (bytes) {
           setRedacted({ bytes, name: redactedName(name), mime: mimeFor(name) });
         }
@@ -495,7 +514,7 @@ export function App() {
         }
       }
     },
-    [showResult],
+    [showResult, trackRedaction],
   );
 
   const onFile = useCallback(
@@ -503,6 +522,7 @@ export function App() {
       if (!file || busy) {
         return;
       }
+      docTokenRef.current += 1; // a fresh upload — arm one analytics event (fired at success, by format)
       setStatus("reading");
       setFileError(false);
       setScannedNotice(false);
@@ -558,6 +578,7 @@ export function App() {
           disabledTypesRef.current,
         );
         showResult(anonymized, true);
+        trackRedaction(redactFormat(file.name));
         if (bytes) {
           setRedacted({ bytes, name: redactedName(file.name), mime: mimeFor(file.name) });
         }
@@ -603,7 +624,7 @@ export function App() {
         setStatus(null);
       }
     },
-    [busy, showResult, ner.status, runScanRedaction],
+    [busy, showResult, ner.status, runScanRedaction, trackRedaction],
   );
 
   // M4: acknowledge the silent NER upgrade by flashing how many keys it added over the deterministic pass.

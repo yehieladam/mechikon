@@ -22,6 +22,22 @@ export function isModelHost(host: string): boolean {
  * so it counts as unexpected. A crafted/odd URL must alarm, not slip through — a false alarm is
  * recoverable; a silent exfiltration path is not (the CSP remains the hard backstop either way).
  */
+/**
+ * Vercel Web Analytics infrastructure path. Beacons for page views + the file_redacted custom event go
+ * here, same-origin, carrying only aggregate labels (never document content). Like the browser-fetched
+ * static assets, these are NOT part of the "0 requests carrying your data" promise, so the trust badge
+ * EXCLUDES them from its count — while the exfiltration alarm (unexpected host) stays fully in force. The
+ * path is same-origin, so it is already `isAllowedRequest`-allowed; this predicate only gates the COUNT.
+ */
+export function isAnalyticsBeacon(url: string, origin: string): boolean {
+  try {
+    const parsed = new URL(url, origin);
+    return parsed.origin === origin && parsed.pathname.startsWith("/_vercel/insights");
+  } catch {
+    return false;
+  }
+}
+
 export function isAllowedRequest(url: string, origin: string): boolean {
   let parsed: URL;
   try {

@@ -15,7 +15,7 @@
  * Scope note: this observes the MAIN thread. The engine worker has its own realm and fetch — its
  * one-time model download is monitored + classified separately (worker/workerNetworkMonitor.ts).
  */
-import { isAllowedRequest } from "./requestPolicy";
+import { isAllowedRequest, isAnalyticsBeacon } from "./requestPolicy";
 
 export interface NetworkState {
   /** Total script-initiated requests on this page (must stay 0 on the local paste/file path). */
@@ -52,6 +52,12 @@ function notify(): void {
 function record(rawUrl: unknown): void {
   const url = urlString(rawUrl);
   const origin = typeof window !== "undefined" ? window.location.origin : "";
+  // Anonymous analytics beacons are infrastructure, not user data — exclude them from the count so the
+  // badge keeps reading the true "0 requests carrying your data" on the redact path. The exfil alarm is
+  // unaffected: this path is same-origin, so it could never have tripped `unexpected` anyway.
+  if (isAnalyticsBeacon(url, origin)) {
+    return;
+  }
   const ok = isAllowedRequest(url, origin);
   let host: string | null = null;
   if (!ok) {

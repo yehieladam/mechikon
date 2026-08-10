@@ -30,6 +30,7 @@
   },
   "dependencies": {
     "@huggingface/transformers": "4.2.0",
+    "@vercel/analytics": "^2.0.1",
     "comlink": "^4.4.2",
     "i18next": "^23.16.8",
     "jszip": "^3.10.1",
