@@ -19,7 +19,7 @@ import * as Comlink from "comlink";
 import { anonymizeDeterministic, anonymizeManualOnly, anonymizeWith } from "@engine/pipeline";
 import { manualSpans, type ManualInput } from "@engine/manual";
 import { restore } from "@engine/restore";
-import type { AnonymizeResult, KeyRow, Span } from "@engine/types";
+import type { AnonymizeResult, EntityType, KeyRow, Span } from "@engine/types";
 import type { RestoreResult } from "@engine/restore";
 import type { HebrewNer } from "@engine/ner";
 import { redactFile, type FileRedaction } from "./officeRedact";
@@ -40,6 +40,27 @@ let nerStatus: NerStatus = "idle";
 let ner: HebrewNer | null = null;
 let nerLoad: Promise<void> | null = null;
 
+// Cache the last NER recognition (keyed by exact text). Re-running the SAME document — a category toggle,
+// a manual-term add, a reveal — is a pure post-detection change, so it must not pay the multi-second model
+// inference again. Model inference is deterministic for identical text, so returning the cached spans is
+// exact. Holds one text + its spans (negligible); a new document's text misses and recomputes.
+let lastNerText: string | null = null;
+let lastNerSpans: readonly Span[] = [];
+
+/** NER recognition with a single-entry text cache (see above). Returns [] until the model is ready. */
+async function recognizeCached(text: string): Promise<readonly Span[]> {
+  if (ner === null) {
+    return [];
+  }
+  if (text === lastNerText) {
+    return lastNerSpans;
+  }
+  const spans = await ner.recognize(text);
+  lastNerText = text;
+  lastNerSpans = spans;
+  return spans;
+}
+
 /** Multi-threaded ORT needs a crossOriginIsolated context; fall back to 1 thread otherwise. */
 function threadCount(): number {
   const isolated = (globalThis as { crossOriginIsolated?: boolean }).crossOriginIsolated ?? false;
@@ -56,14 +77,16 @@ async function anonymizeSmart(
   manualTerms: readonly ManualInput[] = [],
   manualOnly = false,
   excluded: readonly string[] = [],
+  disabledTypes: readonly EntityType[] = [],
 ): Promise<AnonymizeResult> {
   // Manual-only: redact ONLY the user's chosen terms — skip deterministic detection AND NER (no model).
-  // No automatic detections exist to exclude, so `excluded` is irrelevant here.
+  // No automatic detections exist, so `excluded` and `disabledTypes` (which only drop AUTO spans) are both
+  // irrelevant here.
   if (manualOnly) {
     return anonymizeManualOnly(text, manualTerms);
   }
-  const nerSpans = ner === null ? [] : await ner.recognize(text);
-  return anonymizeWith(text, [...nerSpans, ...manualSpans(text, manualTerms)], excluded);
+  const nerSpans = await recognizeCached(text);
+  return anonymizeWith(text, [...nerSpans, ...manualSpans(text, manualTerms)], excluded, disabledTypes);
 }
 
 const api = {
@@ -116,8 +139,9 @@ const api = {
     manualTerms: readonly ManualInput[] = [],
     manualOnly = false,
     excluded: readonly string[] = [],
+    disabledTypes: readonly EntityType[] = [],
   ): Promise<AnonymizeResult> {
-    return anonymizeSmart(text, manualTerms, manualOnly, excluded);
+    return anonymizeSmart(text, manualTerms, manualOnly, excluded, disabledTypes);
   },
 
   /**
@@ -134,12 +158,17 @@ const api = {
     onProgress?: (event: { phase: "reading" | "verifying"; page: number; total: number }) => void,
     manualOnly = false,
     excluded: readonly string[] = [],
+    disabledTypes: readonly EntityType[] = [],
   ): Promise<FileRedaction> {
+    // The category filter rides inside the injected anonymize closure, so every text-based path (docx,
+    // xlsx, txt, csv, digital PDF) picks it up with no per-path change. The scan path is NOT filtered in P0
+    // — the App passes an empty disabledTypes for scanned PDFs so the OCR self-verify (which re-runs this
+    // same closure on the redacted output) can never refuse a deliberately-visible value (that is P1).
     return redactFile(
       fileName,
       buffer,
-      (text) => anonymizeSmart(text, manualTerms, manualOnly, excluded),
-      { scanOcr, onProgress },
+      (text) => anonymizeSmart(text, manualTerms, manualOnly, excluded, disabledTypes),
+      { scanOcr, onProgress, disabledTypes },
     );
   },
 

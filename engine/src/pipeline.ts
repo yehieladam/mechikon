@@ -3,7 +3,7 @@
  * Framework-free, so the Web Worker (web) and the extension both reuse it unchanged. NER is added
  * separately (it is async + needs the model): `anonymizeFull` merges NER spans when available.
  */
-import type { AnonymizeResult, Recognizer, Span } from "./types";
+import type { AnonymizeResult, EntityType, Recognizer, Span } from "./types";
 import { resolveOverlaps, resolveOverlapsPreservingRemainders } from "./resolve";
 import { completeOccurrences } from "./occurrences";
 import { anonymize } from "./anonymize";
@@ -74,28 +74,39 @@ export function anonymizeFull(text: string, nerSpans: readonly Span[]): Anonymiz
  * e.g. a bank name mis-tagged as a location). Any AUTOMATIC span whose exact value is excluded is
  * dropped before + after occurrence-completion, so it never re-appears. A MANUAL term is never excluded
  * (an explicit human choice always wins).
+ *
+ * `disabledTypes` holds entity CATEGORIES the user chose NOT to redact (the category-control layer that
+ * sits below automatic detection). Any AUTOMATIC span of a disabled type is dropped at the same points as
+ * an excluded value, so those values are never tokenized and never enter the key. A MANUAL term is never
+ * disabled (an explicit human choice always wins) even if its underlying type were listed.
  */
 export function anonymizeWith(
   text: string,
   extraSpans: readonly Span[],
   excluded: readonly string[] = [],
+  disabledTypes: readonly EntityType[] = [],
 ): AnonymizeResult {
   const excludedSet = new Set(excluded);
-  const isExcluded = (span: Span): boolean =>
-    span.type !== "MANUAL" && excludedSet.has(text.slice(span.start, span.end));
+  const disabledSet = new Set(disabledTypes);
+  // A span drops out of redaction if the user revealed its exact value OR disabled its category. MANUAL is
+  // immune to both — an explicit human choice always wins. Same predicate is applied at every filter point
+  // below so a dropped span can never be resurrected by occurrence-completion or remainder synthesis.
+  const isDropped = (span: Span): boolean =>
+    span.type !== "MANUAL" &&
+    (excludedSet.has(text.slice(span.start, span.end)) || disabledSet.has(span.type));
   // Preserve remainders (H-manual): a shorter high-priority span (a manual term) overlapping a longer NER
   // name must not erase the name's other words. Winners are identical to resolveOverlaps; only the
   // non-overlapping remainder of a dropped span is added back.
-  // Re-filter the resolved set through isExcluded: resolveOverlapsPreservingRemainders can synthesize a
-  // remainder from a non-excluded parent whose surface value IS excluded (a revealed word that is the tail
+  // Re-filter the resolved set through isDropped: resolveOverlapsPreservingRemainders can synthesize a
+  // remainder from a non-dropped parent whose surface value IS excluded (a revealed word that is the tail
   // of an overlapped name), and that remainder would otherwise be re-redacted despite the user's reveal.
   const base = resolveOverlapsPreservingRemainders(
     text,
-    [...detectDeterministic(text), ...extraSpans].filter((span) => !isExcluded(span)),
-  ).filter((span) => !isExcluded(span));
+    [...detectDeterministic(text), ...extraSpans].filter((span) => !isDropped(span)),
+  ).filter((span) => !isDropped(span));
   // Redact every whole-word occurrence of each confirmed value, not only the tagged ones — otherwise a
   // name NER caught in one place but missed in another (or tagged only half of) leaks the rest.
-  const completed = completeOccurrences(text, base).filter((span) => !isExcluded(span));
+  const completed = completeOccurrences(text, base).filter((span) => !isDropped(span));
   const resolved = resolveOverlaps([...base, ...completed]);
   return anonymize(text, resolved);
 }

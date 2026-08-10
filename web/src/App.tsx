@@ -13,6 +13,15 @@ import {
   type EncryptedKeyFile,
 } from "@engine/keyCrypto";
 import { getEngine } from "./worker/engineClient";
+import { CategoryLegend } from "./CategoryLegend";
+import {
+  FAMILY_PILL_CLASS,
+  familyOf,
+  readDisabledTypes,
+  toggleFamily,
+  writeDisabledTypes,
+  type CategoryFamily,
+} from "./lib/categories";
 import { useNetwork } from "./lib/useNetworkCount";
 import { mimeFor } from "./lib/mime";
 import { exceedsKeyFileLimit, exceedsUploadLimit } from "./lib/uploadLimits";
@@ -134,10 +143,18 @@ const WORD_RUN = /[A-Za-z֐-׿]+(?:['’׳״][A-Za-z֐-׿]+)*|\d+(?:[.\-/]\d+)*/
  * (a manual one is clickable to UNDO), and every remaining word/number is clickable to redact it.
  * This is how the user hand-picks redactions — clicking a word adds it as a manual term everywhere.
  */
+/** Color an automatic token pill by its category family (3 hues x 2 shades); default ink for an unknown
+ *  type. MANUAL tokens never reach here — they have their own amber pill. */
+function autoPillClass(type: EntityType | undefined): string {
+  const family = type ? familyOf(type) : null;
+  return family ? FAMILY_PILL_CLASS[family] : "bg-ink/[0.06] text-ink";
+}
+
 function renderInteractive(
   text: string,
   manualTokenToTerm: ReadonlyMap<string, string>,
   autoTokenToOriginal: ReadonlyMap<string, string>,
+  autoTokenToType: ReadonlyMap<string, EntityType>,
   onPick: (word: string) => void,
   onUndo: (term: string) => void,
   onReveal: (value: string) => void,
@@ -166,14 +183,17 @@ function renderInteractive(
           </button>,
         );
       } else if (autoValue !== undefined) {
-        // An automatic detection — click to REVEAL (exclude the value, un-redact it).
+        // An automatic detection — click to REVEAL (exclude the value, un-redact it). Pill is colored by
+        // the token's category family; the dotted underline inherits the family's text color.
         nodes.push(
           <button
             key={key++}
             type="button"
             title={revealTitle}
             onClick={() => onReveal(autoValue)}
-            className="mx-0.5 cursor-pointer rounded-md bg-ink/[0.06] px-1.5 py-0.5 text-[0.92em] font-medium text-ink underline decoration-ink/40 decoration-dotted underline-offset-2 transition hover:bg-ink/[0.12]"
+            className={`mx-0.5 cursor-pointer rounded-md px-1.5 py-0.5 text-[0.92em] font-medium underline decoration-dotted underline-offset-2 transition hover:opacity-80 ${autoPillClass(
+              autoTokenToType.get(part),
+            )}`}
           >
             {part}
           </button>,
@@ -182,7 +202,9 @@ function renderInteractive(
         nodes.push(
           <mark
             key={key++}
-            className="mx-0.5 rounded-md bg-ink/[0.06] px-1.5 py-0.5 text-[0.92em] font-medium text-ink"
+            className={`mx-0.5 rounded-md px-1.5 py-0.5 text-[0.92em] font-medium ${autoPillClass(
+              autoTokenToType.get(part),
+            )}`}
           >
             {part}
           </mark>,
@@ -299,6 +321,12 @@ export function App() {
   const [excludedTerms, setExcludedTerms] = useState<string[]>([]);
   const excludedRef = useRef(excludedTerms);
   excludedRef.current = excludedTerms;
+  // Category-control layer: EntityTypes the user disabled (never redacted). Persisted (opt-out; default
+  // empty = redact everything, as before). A ref mirrors it so the worker-calling callbacks read the
+  // latest value without each depending on it (same pattern as excludedTerms / manualOnly).
+  const [disabledTypes, setDisabledTypes] = useState<EntityType[]>(() => [...readDisabledTypes()]);
+  const disabledTypesRef = useRef(disabledTypes);
+  disabledTypesRef.current = disabledTypes;
   // The preview box is capped at ~half the viewport and scrolls internally so a long document does not
   // push the whole page; an expand toggle drops the cap.
   const [previewExpanded, setPreviewExpanded] = useState(false);
@@ -393,7 +421,13 @@ export function App() {
       // Manual-only: redact just the chosen terms, no model. Otherwise instant deterministic now, then
       // load NER for names (it upgrades the result when ready).
       showResult(
-        await getEngine().anonymizeSmart(text, [], manualOnlyRef.current, excludedRef.current),
+        await getEngine().anonymizeSmart(
+          text,
+          [],
+          manualOnlyRef.current,
+          excludedRef.current,
+          disabledTypesRef.current,
+        ),
         true,
       );
       if (!manualOnlyRef.current) {
@@ -431,6 +465,9 @@ export function App() {
           onProgress,
           false,
           excludedRef.current,
+          // Scans stay fully unfiltered in P0: the OCR self-verify re-runs this same detection on the
+          // redacted output and would refuse any deliberately-visible value. Category control on scans is P1.
+          [],
         );
         if (isCancelled?.()) return; // source changed / unmounted during the multi-second OCR
         showResult(result, isNewDocument);
@@ -515,6 +552,7 @@ export function App() {
           undefined,
           manualOnlyRef.current,
           excludedRef.current,
+          disabledTypesRef.current,
         );
         showResult(anonymized, true);
         if (bytes) {
@@ -603,6 +641,7 @@ export function App() {
             manualTerms,
             false,
             excludedRef.current,
+            disabledTypesRef.current,
           );
           if (!cancelled) {
             announceNerAdded(upgraded.key.length);
@@ -618,6 +657,7 @@ export function App() {
           undefined,
           false,
           excludedRef.current,
+          disabledTypesRef.current,
         );
         if (cancelled) {
           return;
@@ -669,6 +709,7 @@ export function App() {
               terms,
               manualOnlyRef.current,
               excludedRef.current,
+              disabledTypesRef.current,
             ),
           );
         } else {
@@ -680,6 +721,7 @@ export function App() {
             undefined,
             manualOnlyRef.current,
             excludedRef.current,
+            disabledTypesRef.current,
           );
           showResult(result);
           if (bytes) {
@@ -713,6 +755,21 @@ export function App() {
       void reprocessManual(manualTerms);
     }
   }, [source, manualTerms, reprocessManual]);
+
+  // Toggle a whole category family. Update the ref synchronously so the reprocess below runs under the new
+  // disabled set; persist the choice; re-run the current doc so the preview + key reflect it immediately.
+  const onToggleFamily = useCallback(
+    (family: CategoryFamily) => {
+      const next = [...toggleFamily(disabledTypesRef.current, family)];
+      disabledTypesRef.current = next;
+      setDisabledTypes(next);
+      writeDisabledTypes(next);
+      if (source) {
+        void reprocessManual(manualTerms);
+      }
+    },
+    [source, manualTerms, reprocessManual],
+  );
 
   const onAddManual = useCallback(() => {
     const value = manualInput.trim();
@@ -771,15 +828,17 @@ export function App() {
 
   // Token → original value, split by source: MANUAL tokens a click UNDOES (removes the term); AUTO
   // tokens a click REVEALS (excludes the value). Every visible token is one or the other.
-  const { manualTokenToTerm, autoTokenToOriginal } = useMemo(() => {
+  const { manualTokenToTerm, autoTokenToOriginal, autoTokenToType } = useMemo(() => {
     const manual = new Map<string, string>();
     const auto = new Map<string, string>();
+    const types = new Map<string, EntityType>();
     if (result) {
       for (const row of result.key) {
         (row.type === "MANUAL" ? manual : auto).set(row.placeholder, row.original);
+        types.set(row.placeholder, row.type);
       }
     }
-    return { manualTokenToTerm: manual, autoTokenToOriginal: auto };
+    return { manualTokenToTerm: manual, autoTokenToOriginal: auto, autoTokenToType: types };
   }, [result]);
 
   // Retry loading the names model after it failed — the block is environmental (fetch/WASM), not the
@@ -1342,15 +1401,29 @@ export function App() {
                       ? t("result.manualEmpty")
                       : t("result.none")}
                 </span>
-                {chips.map(([type, count]) => (
-                  <span
-                    key={type}
-                    className="inline-flex items-center gap-1 rounded-full bg-surface px-2.5 py-1 text-xs text-zinc-600"
-                  >
-                    {t(TYPE_LABEL[type])}
-                    <span className="tabular-nums text-zinc-600">{count}</span>
-                  </span>
-                ))}
+                {!manualOnly && !(source?.kind === "file" && source.scan) ? (
+                  // Category-control legend (automatic mode, non-scan sources). Scans keep the plain count
+                  // chips in P0 — their category filter is P1 (the OCR self-verify constraint).
+                  <div className="w-full">
+                    <CategoryLegend
+                      counts={new Map(chips)}
+                      disabled={disabledTypes}
+                      busy={busy}
+                      isScan={false}
+                      onToggleFamily={onToggleFamily}
+                    />
+                  </div>
+                ) : (
+                  chips.map(([type, count]) => (
+                    <span
+                      key={type}
+                      className="inline-flex items-center gap-1 rounded-full bg-surface px-2.5 py-1 text-xs text-zinc-600"
+                    >
+                      {t(TYPE_LABEL[type])}
+                      <span className="tabular-nums text-zinc-600">{count}</span>
+                    </span>
+                  ))
+                )}
                 <button
                   type="button"
                   onClick={() => setShowManualInput((v) => !v)}
@@ -1613,6 +1686,7 @@ export function App() {
                   result.anonymizedText,
                   manualTokenToTerm,
                   autoTokenToOriginal,
+                  autoTokenToType,
                   onPickWord,
                   onRemoveManual,
                   onUnredactAuto,

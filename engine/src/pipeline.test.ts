@@ -76,6 +76,63 @@ describe("anonymizeWith — M-3 (a synthesized remainder must respect the user's
   });
 });
 
+describe("anonymizeWith — disabledTypes (category-control layer)", () => {
+  it("empty disabledTypes is byte-identical to omitting the argument (regression pin)", () => {
+    const withArg = anonymizeWith(DOC, [], [], []);
+    const withoutArg = anonymizeWith(DOC, []);
+    expect(withArg.anonymizedText).toBe(withoutArg.anonymizedText);
+    expect(withArg.key).toEqual(withoutArg.key);
+  });
+
+  it("reveals a disabled category while still redacting the others", () => {
+    const result = anonymizeWith(DOC, [], [], ["IL_PHONE"]);
+    expect(result.anonymizedText).toContain("052-1234567"); // phone left visible
+    expect(result.anonymizedText).toContain("[ID_1]"); // ID still redacted
+    expect(result.anonymizedText).not.toContain("123456709");
+    // The phone is neither tokenized nor keyed; restore round-trips against the untouched cleartext.
+    expect(result.key.some((row) => row.type === "IL_PHONE")).toBe(false);
+    expect(restore(result.anonymizedText, result.key).restoredText).toBe(DOC);
+  });
+
+  it("never disables MANUAL even when its type is listed (explicit human choice wins)", () => {
+    const text = "משה כהן";
+    const manual: Span = { start: 0, end: 3, type: "MANUAL", score: 1 };
+    const result = anonymizeWith(text, [manual], [], ["MANUAL", "PERSON"]);
+    expect(result.anonymizedText).toContain("[TERM_1]");
+    expect(result.anonymizedText).not.toContain("משה");
+  });
+
+  it("occurrence-completion does not resurrect a disabled type", () => {
+    const text = "משה כהן דיווח. משה כהן חתם.";
+    const person: Span = { start: 0, end: 7, type: "PERSON", score: 0.99 };
+    const result = anonymizeWith(text, [person], [], ["PERSON"]);
+    expect(result.anonymizedText).toBe(text); // both occurrences stay in cleartext
+    expect(result.key).toEqual([]);
+  });
+
+  it("composes with excluded: a disabled category and a revealed value are both left visible", () => {
+    const result = anonymizeWith(DOC, [], ["cohen.law@office.co.il"], ["IL_PHONE"]);
+    expect(result.anonymizedText).toContain("052-1234567"); // disabled category
+    expect(result.anonymizedText).toContain("cohen.law@office.co.il"); // revealed value
+    expect(result.anonymizedText).toContain("[ID_1]"); // still redacted
+    expect(result.anonymizedText).not.toContain("123456709");
+  });
+
+  it("an enabled lower-priority type still wins the region when the higher-priority type is disabled", () => {
+    const text = "בנק לאומי";
+    const person: Span = { start: 0, end: text.length, type: "PERSON", score: 0.99 };
+    const org: Span = {
+      start: text.indexOf("לאומי"),
+      end: text.length,
+      type: "ORGANIZATION",
+      score: 0.9,
+    };
+    const result = anonymizeWith(text, [person, org], [], ["PERSON"]);
+    expect(result.anonymizedText).toContain("בנק"); // uncovered once PERSON is disabled
+    expect(result.anonymizedText).not.toContain("לאומי"); // ORGANIZATION still redacts its span
+  });
+});
+
 describe("anonymizeManualOnly", () => {
   it("redacts ONLY the chosen terms and leaves auto-detected PII untouched", () => {
     // Deterministic PII (a valid ID) is present, but manual-only must NOT touch it.

@@ -18,7 +18,7 @@
  * would regenerate the cached value and the formula/source may itself hold the PII. Numbers Excel
  * never uses for 9-digit integers (scientific notation) are the remaining documented non-case.
  */
-import type { AnonymizeResult, Span } from "@engine/types";
+import type { AnonymizeResult, EntityType, Span } from "@engine/types";
 import { anonymizeDeterministic, detectDeterministic } from "@engine/pipeline";
 import { applyOverlay, toReplacements, type Segment } from "@engine/overlay";
 import { decodeXml, encodeXml } from "@engine/xml";
@@ -603,6 +603,9 @@ export interface RedactOptions {
   readonly ocr?: ScanOcr;
   readonly detect?: ScanDetect;
   readonly onProgress?: ScanProgress;
+  /** Categories the user disabled. Threaded to the scan path in P1; text-based paths already carry it via
+   *  the injected `anonymize` closure, so this field is currently accepted but not consumed here. */
+  readonly disabledTypes?: readonly EntityType[];
 }
 
 export async function redactFile(
