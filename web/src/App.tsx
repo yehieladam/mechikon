@@ -23,6 +23,7 @@ import {
   type CategoryFamily,
 } from "./lib/categories";
 import { useNetwork } from "./lib/useNetworkCount";
+import { isLeavingDropZone } from "./lib/dragDepth";
 import { mimeFor } from "./lib/mime";
 import { exceedsKeyFileLimit, exceedsUploadLimit } from "./lib/uploadLimits";
 import { isScanOcrEnabled } from "./lib/scanFlag";
@@ -310,6 +311,8 @@ export function App() {
   const [restoredCopied, setRestoredCopied] = useState(false);
   const restoreSectionRef = useRef<HTMLElement>(null);
   const restoreTextareaRef = useRef<HTMLTextAreaElement>(null);
+  // The main paste textarea — focused after clearing a file so keyboard focus never falls back to <body>.
+  const pasteTextareaRef = useRef<HTMLTextAreaElement>(null);
   // Manual redaction — user-added terms the automatic detectors missed.
   const [manualTerms, setManualTerms] = useState<ManualTerm[]>([]);
   const [manualInput, setManualInput] = useState("");
@@ -771,6 +774,48 @@ export function App() {
     [source, manualTerms, reprocessManual],
   );
 
+  // Clear the current file (the chip's X) and return to a pristine empty input. The app has no other
+  // start-over path, so this drops source/result/input and mirrors the notice-clearing onFile does.
+  // Nulling the source also makes the NER-ready re-run effect bail (it guards on source === null), so an
+  // in-flight model load can't resurrect the cleared document.
+  const onClearSource = useCallback(() => {
+    if (busy) {
+      return;
+    }
+    setSource(null);
+    setResult(null);
+    setRedacted(null);
+    setInput("");
+    setManualTerms([]);
+    setShowManualInput(false);
+    excludedRef.current = [];
+    setExcludedTerms([]);
+    setFileError(false);
+    setScannedNotice(false);
+    setLegacyXlsNotice(false);
+    setLimitNotice(null);
+    setFormulaNotice(false);
+    setSelfVerifyNotice(false);
+    setScanNotice(null);
+    setUnverifiedImagePages([]);
+    setPdfUnverifiedTerms([]);
+    // Also drop the guided-restore panel state — clearing the file is a full start-over, and a stale
+    // restoredText / half-typed paste orphaned from any current document would otherwise linger below.
+    setRestoreOpen(false);
+    setRestoreInput("");
+    setRestoreResult(null);
+    setRestoredCopied(false);
+    setRestoreFileDone(false);
+    setRestoreFileError(null);
+    setRestoreUnmatched(0);
+    setNerAdded(null);
+    setKeyDownloaded(false);
+    setPassphraseMissing(false);
+    // Move focus to the (now empty) paste box so it never falls back to <body> when the chip unmounts.
+    // After the re-render commits (the chip is gone) so focus lands on the textarea, not the removed button.
+    requestAnimationFrame(() => pasteTextareaRef.current?.focus());
+  }, [busy]);
+
   const onAddManual = useCallback(() => {
     const value = manualInput.trim();
     if (value.length === 0 || manualTerms.some((term) => term.value === value)) {
@@ -1054,6 +1099,10 @@ export function App() {
     return [...counts.entries()];
   }, [result]);
 
+  // The name of the currently-loaded file (drives the filename chip + the "replace file" label). Null for
+  // a text/paste source, so those affordances only show for an actual upload.
+  const fileName = source?.kind === "file" ? source.name : null;
+
   const statusLine =
     status === "reading"
       ? t("input.reading")
@@ -1199,7 +1248,13 @@ export function App() {
               event.preventDefault();
               setDragging(true);
             }}
-            onDragLeave={() => setDragging(false)}
+            onDragLeave={(event) => {
+              // Only drop the highlight when the pointer actually leaves the zone — moving onto a child
+              // (the textarea, a button) must NOT flicker it off. See isLeavingDropZone.
+              if (isLeavingDropZone(event.currentTarget, event.relatedTarget)) {
+                setDragging(false);
+              }
+            }}
             onDrop={(event) => {
               event.preventDefault();
               setDragging(false);
@@ -1211,6 +1266,7 @@ export function App() {
             }`}
           >
             <textarea
+              ref={pasteTextareaRef}
               dir="rtl"
               lang="he"
               spellCheck={false}
@@ -1231,7 +1287,7 @@ export function App() {
                     strokeLinejoin="round"
                   />
                 </svg>
-                {t("input.upload")}
+                {t(fileName ? "input.replaceFile" : "input.upload")}
                 <input
                   type="file"
                   accept=".docx,.xlsx,.csv,.pdf,.txt"
@@ -1243,6 +1299,40 @@ export function App() {
                   }}
                 />
               </label>
+              {/* Filename chip: the only persistent proof a file was loaded (esp. in manual-only mode, where
+                  a fast redaction may leave the result area near-empty). Clicking it starts over. Sits
+                  OUTSIDE the upload <label> so a click clears rather than reopening the file picker. */}
+              {fileName && (
+                <button
+                  type="button"
+                  onClick={onClearSource}
+                  disabled={busy}
+                  aria-label={t("input.clearFile", { name: fileName })}
+                  className="inline-flex min-h-[44px] items-center gap-2 rounded-full border border-hairline bg-surface px-3 text-sm font-medium text-ink transition hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/20 active:scale-[0.98] touch-manipulation disabled:opacity-40"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path
+                      d="M7 3h7l4 4v14H7zM14 3v4h4"
+                      stroke="currentColor"
+                      strokeWidth="1.8"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                  <span dir="ltr" className="max-w-[160px] truncate">
+                    {fileName}
+                  </span>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path
+                      d="M6 6l12 12M18 6L6 18"
+                      stroke="currentColor"
+                      strokeWidth="1.8"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </button>
+              )}
               <button
                 type="button"
                 onClick={onAnonymize}
@@ -1254,7 +1344,17 @@ export function App() {
             </div>
           </div>
           {input.length === 0 && !result && (
-            <p className="mt-2 px-2 text-xs text-zinc-500">{t("input.dropHint")}</p>
+            // Empty-slate hint only. On the file path `input` stays "", so without the !result guard this
+            // would render "or drag a file here" beneath a populated result — reading as if nothing loaded.
+            // Once a file is loaded, the chip + "replace file" label carry the affordance; a drag still
+            // shows the border highlight for feedback.
+            <p
+              className={`mt-2 px-2 text-xs transition ${
+                dragging ? "font-medium text-ink" : "text-zinc-500"
+              }`}
+            >
+              {t(dragging ? "input.dropActive" : "input.dropHint")}
+            </p>
           )}
           {looksReturnedFromAi && (
             <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 px-2 text-[13px] text-zinc-500">
