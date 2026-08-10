@@ -113,6 +113,12 @@ describe("installNetworkMonitor — existing primitives stay observed", () => {
     expect(d.after.unexpectedHost).toBe("evil.example.net");
   });
 
+  it("does NOT count the same-origin Vercel analytics beacon (infrastructure, excluded from the badge)", () => {
+    const d = delta(() => void fakeWindow.fetch(`${ORIGIN}/_vercel/insights/event`));
+    expect(d.count).toBe(0); // the trust badge stays at a true 0 on the redact path
+    expect(d.unexpected).toBe(0);
+  });
+
   it("counts a WebSocket construction", () => {
     const d = delta(() => void new fakeWindow.WebSocket("wss://evil.example.net/ws"));
     expect(d.count).toBe(1);

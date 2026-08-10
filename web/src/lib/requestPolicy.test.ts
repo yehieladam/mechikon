@@ -3,7 +3,7 @@
  * anything else is an exfiltration signal. Getting this classifier right is what makes the badge honest.
  */
 import { describe, expect, it } from "vitest";
-import { isAllowedRequest, isModelHost } from "./requestPolicy";
+import { isAllowedRequest, isAnalyticsBeacon, isModelHost } from "./requestPolicy";
 
 const ORIGIN = "https://mechikon.example.com";
 
@@ -43,5 +43,23 @@ describe("isAllowedRequest", () => {
     // Absolute-but-invalid URLs that throw even with a valid base.
     expect(isAllowedRequest("https://", ORIGIN)).toBe(false);
     expect(isAllowedRequest("http://exa mple.com/x", ORIGIN)).toBe(false);
+  });
+});
+
+describe("isAnalyticsBeacon", () => {
+  it("matches the same-origin Vercel insights path (absolute and relative)", () => {
+    expect(isAnalyticsBeacon(`${ORIGIN}/_vercel/insights/view`, ORIGIN)).toBe(true);
+    expect(isAnalyticsBeacon(`${ORIGIN}/_vercel/insights/event`, ORIGIN)).toBe(true);
+    expect(isAnalyticsBeacon("/_vercel/insights/script.js", ORIGIN)).toBe(true);
+  });
+  it("does NOT match other same-origin paths (only the count is gated, not the whole origin)", () => {
+    expect(isAnalyticsBeacon(`${ORIGIN}/assets/app.js`, ORIGIN)).toBe(false);
+    expect(isAnalyticsBeacon(`${ORIGIN}/_vercelinsights`, ORIGIN)).toBe(false);
+  });
+  it("does NOT match the insights path on a FOREIGN origin — an exfil host must never be excused", () => {
+    expect(isAnalyticsBeacon("https://evil.example.net/_vercel/insights/view", ORIGIN)).toBe(false);
+  });
+  it("returns false on an unparseable URL (nothing to exclude — let the counter see it)", () => {
+    expect(isAnalyticsBeacon("not a url", "")).toBe(false);
   });
 });
