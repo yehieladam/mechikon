@@ -109,8 +109,9 @@ function restoreText(buffer: ArrayBuffer, key: readonly KeyRow[]): RestoredFile 
 export const RESTORE_UNSUPPORTED = "RESTORE_UNSUPPORTED";
 
 /**
- * Restore an uploaded file with the key. Routes .docx / .xlsx / .txt; other types throw
- * RESTORE_UNSUPPORTED (the app tells the user to have the AI return a .docx/.xlsx).
+ * Restore an uploaded file with the key. Routes .docx / .xlsx / .txt / .csv; other types throw
+ * RESTORE_UNSUPPORTED (the app tells the user to have the AI return a .docx/.xlsx). .csv rides the same
+ * plain-text path as .txt — redaction already accepts .csv, so restore must mirror it.
  */
 export async function restoreFile(
   fileName: string,
@@ -125,6 +126,7 @@ export async function restoreFile(
     case "xlsx":
       return restoreXlsx(buffer, key, maxInflatedBytes);
     case "txt":
+    case "csv":
       return restoreText(buffer, key);
     default:
       throw new Error(RESTORE_UNSUPPORTED);
