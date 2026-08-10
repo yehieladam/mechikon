@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 import JSZip from "jszip";
-import { redactDocx } from "./officeRedact";
+import { redactDocx, redactXlsx } from "./officeRedact";
 import { restoreFile, RESTORE_UNSUPPORTED } from "./restoreFile";
 import { anonymizeDeterministic } from "@engine/pipeline";
 
@@ -57,5 +57,54 @@ describe("restoreFile — docx round-trip", () => {
 
   it("throws RESTORE_UNSUPPORTED for an unsupported type (e.g. pdf)", async () => {
     await expect(restoreFile("x.pdf", new ArrayBuffer(4), [])).rejects.toThrow(RESTORE_UNSUPPORTED);
+  });
+});
+
+/**
+ * A minimal multi-sheet .xlsx: sheet1 carries a phone via the shared-string table (`<si><t>`), sheet2
+ * carries an Israeli ID typed as a NUMBER (`<c><v>…</v></c>`) — the two forms redaction rewrites
+ * differently (shared string in place vs numeric cell converted to an inline-string placeholder). A
+ * correct restore must reverse BOTH, across both sheets.
+ */
+async function buildXlsx(): Promise<ArrayBuffer> {
+  const sharedStrings = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="1" uniqueCount="1"><si><t xml:space="preserve">טלפון 052-1234567</t></si></sst>`;
+  const sheet1 = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row></sheetData></worksheet>`;
+  const sheet2 = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1"><v>123456709</v></c></row></sheetData></worksheet>`;
+  const zip = new JSZip();
+  zip.file("[Content_Types].xml", "<Types/>");
+  zip.file("xl/sharedStrings.xml", sharedStrings);
+  zip.file("xl/worksheets/sheet1.xml", sheet1);
+  zip.file("xl/worksheets/sheet2.xml", sheet2);
+  return zip.generateAsync({ type: "arraybuffer" });
+}
+
+describe("restoreFile — xlsx round-trip (multi-sheet)", () => {
+  it("puts the original values back into a redacted multi-sheet xlsx", async () => {
+    const { bytes: redacted, result } = await redactXlsx(await buildXlsx(), anonymizeDeterministic);
+
+    // Sanity: the redacted xlsx holds placeholders, not the originals — the phone in the shared-string
+    // table (sheet1) and the ID converted to an inline-string cell (sheet2).
+    const redactedDoc = await JSZip.loadAsync(redacted);
+    const redactedShared = await redactedDoc.file("xl/sharedStrings.xml")!.async("string");
+    const redactedSheet2 = await redactedDoc.file("xl/worksheets/sheet2.xml")!.async("string");
+    expect(redactedShared).toContain("[PHONE_1]");
+    expect(redactedShared).not.toContain("052-1234567");
+    expect(redactedSheet2).toContain("[ID_1]");
+    expect(redactedSheet2).not.toContain("123456709");
+
+    // Restore the redacted file with its key.
+    const restored = await restoreFile("book.xlsx", redacted.buffer.slice(0) as ArrayBuffer, result.key);
+    const restoredDoc = await JSZip.loadAsync(restored.bytes);
+    const restoredShared = await restoredDoc.file("xl/sharedStrings.xml")!.async("string");
+    const restoredSheet2 = await restoredDoc.file("xl/worksheets/sheet2.xml")!.async("string");
+
+    expect(restoredShared).toContain("052-1234567");
+    expect(restoredShared).not.toContain("[PHONE_1]");
+    expect(restoredSheet2).toContain("123456709");
+    expect(restoredSheet2).not.toContain("[ID_1]");
+    expect(restored.unmatched).toHaveLength(0);
   });
 });
