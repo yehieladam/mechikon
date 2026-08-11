@@ -92,6 +92,9 @@ function downloadBlob(blob: Blob, fileName: string): void {
 const TYPE_LABEL: Record<EntityType, string> = {
   ISRAELI_ID: "entity.id",
   IL_COMPANY: "entity.company",
+  IL_PASSPORT: "entity.passport",
+  IL_BAR: "entity.bar",
+  DATE_OF_BIRTH: "entity.dob",
   IL_PHONE: "entity.phone",
   IL_IBAN: "entity.iban",
   IL_CASE: "entity.case",

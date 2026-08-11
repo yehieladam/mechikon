@@ -36,8 +36,12 @@ export function isValidIsraeliPhone(raw: string): boolean {
  * "(02) 624-1234" and double spaces are tolerated (M-format). `(?<![\w+])` / `(?![\w])` still stop it
  * from biting into a longer digit run (an account number or a 9-digit ID that does not start 0/972);
  * normalize() strips every non-digit before the numbering-plan check.
+ *
+ * The separator class is horizontal whitespace ONLY (` \t`), never `\s` — a bare `\s` includes the
+ * newline, so a phone at the end of a numbered line ("...052-1234567\n8. ...") would swallow the next
+ * line's leading digit, overflow the numbering plan, and leak the whole number unredacted.
  */
-const PHONE_CANDIDATE = /(?<![\w+])\(?(?:\+?972[-.\s()]{0,2}|0)(?:\d[-.\s()]{0,2}){7,9}\d(?![\w])/g;
+const PHONE_CANDIDATE = /(?<![\w+])\(?(?:\+?972[-. \t()]{0,2}|0)(?:\d[-. \t()]{0,2}){7,9}\d(?![\w])/g;
 
 /** Flags Israeli phone numbers (mobile + landline, national and +972 forms). */
 export const israeliPhoneRecognizer: Recognizer = {

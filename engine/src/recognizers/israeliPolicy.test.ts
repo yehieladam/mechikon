@@ -30,4 +30,15 @@ describe("israeliPolicyRecognizer", () => {
   it("ignores the keyword with no following number", () => {
     expect(israeliPolicyRecognizer.recognize("הפוליסה שלי בתוקף")).toHaveLength(0);
   });
+
+  it("handles 'פוליסת ביטוח מס׳' and 'פוליסה שמספרה' phrasings", () => {
+    for (const [text, expected] of [
+      ["פוליסת ביטוח מס' 98765432", "98765432"],
+      ["פוליסה שמספרה 55501", "55501"],
+    ] as const) {
+      const spans = israeliPolicyRecognizer.recognize(text);
+      expect(spans).toHaveLength(1);
+      expect(text.slice(spans[0].start, spans[0].end)).toBe(expected);
+    }
+  });
 });

@@ -43,4 +43,22 @@ describe("israeliCaseRecognizer — תיק context", () => {
   it("does not fire on the bare word תיק with no number", () => {
     expect(israeliCaseRecognizer.recognize("הדיון בתיק נדחה")).toHaveLength(0);
   });
+
+  it("flags case-type-prefixed numbers (ע״א / בג״ץ / ת.פ. / ת״א), number only", () => {
+    for (const [text, expected] of [
+      ['ע"א 1234/05', "1234/05"],
+      ['בג"ץ 5678/20', "5678/20"],
+      ["ת.פ. 4587/09", "4587/09"],
+      ['ת"א 9999/21', "9999/21"],
+    ] as const) {
+      const spans = israeliCaseRecognizer.recognize(text);
+      expect(spans).toHaveLength(1);
+      expect(text.slice(spans[0].start, spans[0].end)).toBe(expected);
+    }
+  });
+
+  it("does NOT fire on a case prefix used as a plain word (ת״א = תל אביב) with no case number", () => {
+    expect(israeliCaseRecognizer.recognize('ת"א רבתי היא עיר גדולה')).toHaveLength(0);
+    expect(israeliCaseRecognizer.recognize('רחוב הרצל 12, ת"א 6971022')).toHaveLength(0);
+  });
 });

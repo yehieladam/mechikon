@@ -12,6 +12,7 @@ import { manualSpans, type ManualInput } from "./manual";
 import { israeliIdRecognizer } from "./recognizers/israeliId";
 import { israeliPhoneRecognizer } from "./recognizers/israeliPhone";
 import { israeliCompanyRecognizer } from "./recognizers/israeliCompany";
+import { labeledRecognizer } from "./recognizers/labeled";
 import { israeliIbanRecognizer } from "./recognizers/israeliIban";
 import { israeliCaseRecognizer } from "./recognizers/israeliCase";
 import { israeliLandRecognizer } from "./recognizers/israeliLand";
@@ -23,6 +24,7 @@ import { emailRecognizer } from "./recognizers/email";
 export const DETERMINISTIC_RECOGNIZERS: readonly Recognizer[] = [
   israeliIdRecognizer,
   israeliCompanyRecognizer,
+  labeledRecognizer,
   israeliIbanRecognizer,
   israeliPhoneRecognizer,
   israeliCaseRecognizer,

@@ -92,5 +92,13 @@ describe("israeliPhoneRecognizer", () => {
       expect(spans).toHaveLength(1);
       expect(spans[0].type).toBe("IL_PHONE");
     });
+
+    it("does NOT swallow the next line's leading digit (numbered clauses)", () => {
+      // A newline must not act as an in-number separator: "...052-1234567\n8. ..." would otherwise
+      // overflow the numbering plan and leak the whole phone. Common in numbered legal documents.
+      const spans = israeliPhoneRecognizer.recognize("7. טלפון 052-1234567\n8. ביום 15.3.2024");
+      expect(spans).toHaveLength(1);
+      expect(spans[0].type).toBe("IL_PHONE");
+    });
   });
 });

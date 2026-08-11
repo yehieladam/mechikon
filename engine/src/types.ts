@@ -11,6 +11,9 @@ export type NerEntityType = "PERSON" | "ORGANIZATION" | "LOCATION";
 export type DeterministicEntityType =
   | "ISRAELI_ID" // teudat zehut, Luhn checksum
   | "IL_COMPANY" // ח"פ company number
+  | "IL_PASSPORT" // passport number (דרכון) — label-gated, no checksum exists
+  | "IL_BAR" // lawyer bar-license number (מ.ר.) — label-gated
+  | "DATE_OF_BIRTH" // birth date (יליד/נולד/ת. לידה) — label-gated, so ordinary dates are left alone
   | "IL_PHONE"
   | "IL_IBAN"
   | "IL_CASE" // court/case file number (תיק)
@@ -39,6 +42,9 @@ export const PRIORITY: Readonly<Record<EntityType, number>> = {
   MANUAL: 4, // explicit user choice wins over every automatic detection
   ISRAELI_ID: 3,
   IL_COMPANY: 3,
+  IL_PASSPORT: 3,
+  IL_BAR: 3,
+  DATE_OF_BIRTH: 3,
   IL_IBAN: 3,
   IL_PHONE: 3,
   IL_CASE: 3,
