@@ -2007,136 +2007,254 @@ export function App() {
           <details
             open={restoreOpen}
             onToggle={(event) => setRestoreOpen(event.currentTarget.open)}
-            className="group rounded-2xl border border-hairline bg-white transition hover:border-zinc-300"
+            className="group rounded-2xl border border-[#e0ebe4] bg-[#f1f8f4] transition hover:border-[#d3e2d9]"
           >
-            <summary className="flex cursor-pointer list-none items-center justify-between p-5 text-sm font-medium text-ink">
-              {t("restore.title")}
-              <span className="text-zinc-500 transition group-open:rotate-180" aria-hidden="true">
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-3 p-5 text-ink">
+              <span className="flex min-w-0 items-center gap-3">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white text-emerald-700 shadow-sm">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <circle cx="8.5" cy="8.5" r="4.5" stroke="currentColor" strokeWidth="1.8" />
+                    <path d="M11.8 11.8 20 20" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                    <path d="M15.5 15.5l2.2-2.2M18 18l1.8-1.8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                  </svg>
+                </span>
+                <span className="min-w-0">
+                  <span className="block text-sm font-medium">{t("restore.title")}</span>
+                  <span className="mt-0.5 block text-xs font-normal text-zinc-600">
+                    {t("restore.summaryHint")}
+                  </span>
+                </span>
+              </span>
+              <span className="shrink-0 text-zinc-500 transition group-open:rotate-180" aria-hidden="true">
                 ⌄
               </span>
             </summary>
             <div className="px-5 pb-5">
-              <p className="text-xs leading-relaxed text-zinc-500">{t("restore.subtitle")}</p>
+              <p className="text-xs leading-relaxed text-zinc-600">{t("restore.subtitle")}</p>
 
-              {/* Step 1 — key. A live key shows a green done line + a quiet replace link; otherwise a
-                  blocking upload step, since without a key there is nothing to restore. An encrypted key
-                  that is uploaded but not yet unlocked (pendingEnc) leaves activeKey null, so it stays in
-                  the upload state with the passphrase field below. */}
-              {activeKey && activeKey.length > 0 ? (
-                <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2">
-                  <span className="inline-flex items-center gap-1.5 text-[13px] font-medium text-emerald-800">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                      <path
-                        d="M5 12l4.5 4.5L19 7"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
+              {/* Vertical stepper (RTL): the round-trip reads top-to-bottom as a real flow — 1 key,
+                  2 what to restore, 3 result. A rail line connects the numbered badges. The key sits
+                  ABOVE the input (not beside it) so the sequence is unmistakable. */}
+              <div className="mt-5">
+                {/* Step 1 — key. A live key shows a green done line + a quiet replace link; otherwise a
+                    blocking upload step, since without a key there is nothing to restore. An encrypted key
+                    that is uploaded but not yet unlocked (pendingEnc) leaves activeKey null, so it stays in
+                    the upload state with the passphrase field below. The badge flips to a green check once
+                    a key is active. */}
+                <div className="flex gap-3 sm:gap-4">
+                  <div className="flex flex-col items-center self-stretch">
+                    <span
+                      className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[13px] font-semibold ${
+                        activeKey && activeKey.length > 0 ? "bg-emerald-500 text-white" : "bg-ink text-white"
+                      }`}
+                    >
+                      {activeKey && activeKey.length > 0 ? (
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                          <path d="M5 12l4.5 4.5L19 7" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                      ) : (
+                        "1"
+                      )}
+                    </span>
+                    <span className="mt-1 w-px flex-1 bg-hairline" aria-hidden="true" />
+                  </div>
+                  <div className="min-w-0 flex-1 pb-6">
+                    <div className="flex items-center gap-2 text-[13px] font-medium text-ink">
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true" className="shrink-0 text-zinc-500">
+                        <circle cx="8.5" cy="8.5" r="4.5" stroke="currentColor" strokeWidth="1.8" />
+                        <path d="M11.8 11.8 20 20" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                        <path d="M15.5 15.5l2.2-2.2M18 18l1.8-1.8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                      </svg>
+                      {t("restore.keyLabel")}
+                    </div>
+                  {activeKey && activeKey.length > 0 ? (
+                    <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2">
+                      <span className="inline-flex items-center gap-1.5 text-[13px] font-medium text-emerald-800">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                          <path
+                            d="M5 12l4.5 4.5L19 7"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        </svg>
+                        {t("restore.keyActive", { count: activeKey.length })}
+                      </span>
+                      <label className="inline-flex min-h-[44px] cursor-pointer items-center text-xs font-medium text-emerald-700 underline underline-offset-2 transition hover:text-emerald-900">
+                        {t("key.replace")}
+                        <input
+                          type="file"
+                          accept=".json"
+                          className="hidden"
+                          onChange={(event) => {
+                            void onUploadKey(event.target.files?.[0]);
+                            event.currentTarget.value = "";
+                          }}
+                        />
+                      </label>
+                    </div>
+                  ) : (
+                    <div className="mt-3">
+                      <p className="text-[13px] text-zinc-600">{t("restore.keyStep")}</p>
+                      <label className="mt-2 inline-flex min-h-[44px] cursor-pointer items-center gap-2 rounded-full bg-ink px-5 text-[14px] font-medium text-white transition hover:opacity-90 active:scale-[0.98]">
+                        {uploadedKey ? t("key.loaded", { count: uploadedKey.length }) : t("key.upload")}
+                        <input
+                          type="file"
+                          accept=".json"
+                          className="hidden"
+                          onChange={(event) => {
+                            void onUploadKey(event.target.files?.[0]);
+                            event.currentTarget.value = "";
+                          }}
+                        />
+                      </label>
+                    </div>
+                  )}
+                  {pendingEnc && (
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      <input
+                        type="password"
+                        value={unlockPassphrase}
+                        onChange={(event) => setUnlockPassphrase(event.target.value)}
+                        placeholder={t("key.passphrase")}
+                        aria-label={t("key.passphrase")}
+                        className="min-w-[160px] flex-1 rounded-xl border border-hairline bg-white px-3 py-2 text-[16px] outline-none focus-visible:ring-2 focus-visible:ring-ink/20 placeholder:text-zinc-500"
                       />
-                    </svg>
-                    {t("restore.keyActive", { count: activeKey.length })}
-                  </span>
-                  <label className="inline-flex min-h-[44px] cursor-pointer items-center text-xs font-medium text-emerald-700 underline underline-offset-2 transition hover:text-emerald-900">
-                    {t("key.replace")}
-                    <input
-                      type="file"
-                      accept=".json"
-                      className="hidden"
-                      onChange={(event) => {
-                        void onUploadKey(event.target.files?.[0]);
-                        event.currentTarget.value = "";
-                      }}
-                    />
-                  </label>
+                      <button
+                        type="button"
+                        onClick={onUnlockKey}
+                        className="min-h-[44px] rounded-full bg-ink px-5 text-[14px] font-medium text-white transition hover:opacity-90"
+                      >
+                        {t("key.unlock")}
+                      </button>
+                    </div>
+                  )}
+                  {keyError && (
+                    <p className="mt-2 text-xs text-amber-700" role="alert">
+                      {keyError === "wrong" ? t("key.wrongPassphrase") : t("key.invalid")}
+                    </p>
+                  )}
+                  </div>
                 </div>
-              ) : (
-                <div className="mt-3 rounded-xl border border-hairline bg-surface px-3 py-3">
-                  <p className="text-[13px] text-zinc-600">{t("restore.keyStep")}</p>
-                  <label className="mt-2 inline-flex min-h-[44px] cursor-pointer items-center gap-2 rounded-full border border-hairline bg-white px-5 text-[14px] font-medium text-ink transition hover:bg-surface">
-                    {uploadedKey ? t("key.loaded", { count: uploadedKey.length }) : t("key.upload")}
-                    <input
-                      type="file"
-                      accept=".json"
-                      className="hidden"
-                      onChange={(event) => {
-                        void onUploadKey(event.target.files?.[0]);
-                        event.currentTarget.value = "";
-                      }}
-                    />
-                  </label>
+
+                {/* Step 2 — what to restore: one segmented control picks text vs whole-file. The rail
+                    continues to step 3 only once a result exists. */}
+                <div className="flex gap-3 sm:gap-4">
+                  <div className="flex flex-col items-center self-stretch">
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-ink text-[13px] font-semibold text-white">
+                      2
+                    </span>
+                    {restoreMode === "text" && restoreResult ? (
+                      <span className="mt-1 w-px flex-1 bg-hairline" aria-hidden="true" />
+                    ) : null}
+                  </div>
+                  <div className="min-w-0 flex-1 pb-6">
+                  <div className="text-[13px] font-medium text-ink">{t("restore.whatLabel")}</div>
+                  <div
+                    className="mt-2 inline-flex rounded-full border border-hairline bg-zinc-100 p-0.5"
+                    role="group"
+                    aria-label={t("restore.whatLabel")}
+                  >
+                    {(["text", "file"] as const).map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() => setRestoreMode(mode)}
+                        aria-pressed={restoreMode === mode}
+                        className={`min-h-[44px] rounded-full px-4 text-[13px] font-medium transition ${
+                          restoreMode === mode ? "bg-ink text-white" : "text-zinc-600 hover:text-ink"
+                        }`}
+                      >
+                        {t(mode === "text" ? "restore.modeText" : "restore.modeFile")}
+                      </button>
+                    ))}
+                  </div>
+
+                  {restoreMode === "text" ? (
+                    <>
+                      <textarea
+                        ref={restoreTextareaRef}
+                        dir="rtl"
+                        lang="he"
+                        spellCheck={false}
+                        value={restoreInput}
+                        onChange={(event) => setRestoreInput(event.target.value)}
+                        aria-label={t("restore.placeholder")}
+                        className="mt-3 min-h-[120px] w-full resize-none rounded-2xl border border-hairline bg-white p-4 text-[16px] leading-relaxed outline-none focus-visible:ring-2 focus-visible:ring-ink/20 placeholder:text-zinc-500"
+                        placeholder={t("restore.placeholder")}
+                      />
+                      <button
+                        type="button"
+                        onClick={onRestore}
+                        disabled={restoreInput.trim().length === 0}
+                        className="mt-3 min-h-[44px] rounded-full bg-ink px-5 text-[15px] font-medium text-white transition hover:opacity-90 active:scale-[0.98] disabled:opacity-30"
+                      >
+                        {t("restore.submit")}
+                      </button>
+                    </>
+                  ) : (
+                    <div className="mt-3">
+                      <p className="text-xs leading-relaxed text-zinc-600">{t("restoreFile.explain")}</p>
+                      <label className="mt-3 inline-flex min-h-[44px] cursor-pointer items-center gap-2 rounded-full bg-ink px-5 text-[14px] font-medium text-white transition hover:opacity-90 active:scale-[0.98]">
+                        {t("restoreFile.upload")}
+                        <input
+                          type="file"
+                          accept=".docx,.xlsx,.txt,.csv"
+                          className="hidden"
+                          onChange={(event) => {
+                            void onRestoreFile(event.target.files?.[0]);
+                            event.currentTarget.value = "";
+                          }}
+                        />
+                      </label>
+                      {restoreFileDone && (
+                        <p className="mt-2 inline-flex items-center gap-1.5 text-[13px] font-medium text-emerald-800">
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                            <path
+                              d="M5 12l4.5 4.5L19 7"
+                              stroke="currentColor"
+                              strokeWidth="2"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            />
+                          </svg>
+                          {t("restore.fileSuccess")}
+                        </p>
+                      )}
+                      {restoreFileError && (
+                        <p className="mt-2 text-xs text-amber-700" role="alert">
+                          {restoreFileError === "nokey"
+                            ? t("restoreFile.noKey")
+                            : restoreFileError === "unsupported"
+                              ? t("restoreFile.unsupported")
+                              : restoreFileError === "toobig"
+                                ? t("restoreFile.tooLarge")
+                                : t("restoreFile.generic")}
+                        </p>
+                      )}
+                      {restoreUnmatched > 0 && (
+                        <p className="mt-2 text-xs text-amber-700">
+                          {t("restore.unmatched", { count: restoreUnmatched })}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                  </div>
                 </div>
-              )}
-              {pendingEnc && (
-                <div className="mt-3 flex flex-wrap items-center gap-2">
-                  <input
-                    type="password"
-                    value={unlockPassphrase}
-                    onChange={(event) => setUnlockPassphrase(event.target.value)}
-                    placeholder={t("key.passphrase")}
-                    aria-label={t("key.passphrase")}
-                    className="min-w-[200px] flex-1 rounded-xl border border-hairline bg-surface px-3 py-2 text-[16px] outline-none focus-visible:ring-2 focus-visible:ring-ink/20 placeholder:text-zinc-500"
-                  />
-                  <button
-                    type="button"
-                    onClick={onUnlockKey}
-                    className="min-h-[44px] rounded-full bg-ink px-5 text-[14px] font-medium text-white transition hover:opacity-90"
-                  >
-                    {t("key.unlock")}
-                  </button>
-                </div>
-              )}
-              {keyError && (
-                <p className="mt-2 text-xs text-amber-700" role="alert">
-                  {keyError === "wrong" ? t("key.wrongPassphrase") : t("key.invalid")}
-                </p>
-              )}
 
-              {/* Step 2 — what to restore: one segmented control, only one path shown at a time. */}
-              <div
-                className="mt-4 inline-flex rounded-full border border-hairline p-0.5"
-                role="group"
-                aria-label={t("restore.title")}
-              >
-                {(["text", "file"] as const).map((mode) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    onClick={() => setRestoreMode(mode)}
-                    aria-pressed={restoreMode === mode}
-                    className={`min-h-[44px] rounded-full px-4 text-[13px] font-medium transition ${
-                      restoreMode === mode ? "bg-ink text-white" : "text-zinc-600 hover:text-ink"
-                    }`}
-                  >
-                    {t(mode === "text" ? "restore.modeText" : "restore.modeFile")}
-                  </button>
-                ))}
-              </div>
-
-              {restoreMode === "text" ? (
-                <>
-                  <textarea
-                    ref={restoreTextareaRef}
-                    dir="rtl"
-                    lang="he"
-                    spellCheck={false}
-                    value={restoreInput}
-                    onChange={(event) => setRestoreInput(event.target.value)}
-                    aria-label={t("restore.placeholder")}
-                    className="mt-3 min-h-[120px] w-full resize-none rounded-2xl border border-hairline bg-surface p-4 text-[16px] leading-relaxed outline-none focus-visible:ring-2 focus-visible:ring-ink/20 placeholder:text-zinc-500"
-                    placeholder={t("restore.placeholder")}
-                  />
-                  <button
-                    type="button"
-                    onClick={onRestore}
-                    disabled={restoreInput.trim().length === 0}
-                    className="mt-3 min-h-[44px] rounded-full border border-hairline px-5 text-[15px] font-medium text-ink transition hover:bg-surface disabled:opacity-30"
-                  >
-                    {t("restore.submit")}
-                  </button>
-
-                  {/* Step 3 — output (M2 climax). */}
-                  {restoreResult && (
-                    <div className="mt-4" role="status" aria-live="polite">
+                {/* Step 3 — result (M2 climax). Text mode only; the badge is a green check to mark the
+                    flow complete. */}
+                {restoreMode === "text" && restoreResult && (
+                  <div className="flex gap-3 sm:gap-4">
+                    <div className="flex flex-col items-center">
+                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-white">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                          <path d="M5 12l4.5 4.5L19 7" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                      </span>
+                    </div>
+                    <div className="min-w-0 flex-1" role="status" aria-live="polite">
                       {restoredCount > 0 && (
                         <p className="mb-2 inline-flex items-center gap-1.5 text-[13px] font-medium text-emerald-800">
                           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -2202,55 +2320,9 @@ export function App() {
                         </p>
                       )}
                     </div>
-                  )}
-                </>
-              ) : (
-                <div className="mt-3">
-                  <p className="text-xs leading-relaxed text-zinc-500">{t("restoreFile.explain")}</p>
-                  <label className="mt-3 inline-flex min-h-[44px] cursor-pointer items-center gap-2 rounded-full border border-hairline bg-white px-5 text-[14px] font-medium text-ink transition hover:bg-surface">
-                    {t("restoreFile.upload")}
-                    <input
-                      type="file"
-                      accept=".docx,.xlsx,.txt,.csv"
-                      className="hidden"
-                      onChange={(event) => {
-                        void onRestoreFile(event.target.files?.[0]);
-                        event.currentTarget.value = "";
-                      }}
-                    />
-                  </label>
-                  {restoreFileDone && (
-                    <p className="mt-2 inline-flex items-center gap-1.5 text-[13px] font-medium text-emerald-800">
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                        <path
-                          d="M5 12l4.5 4.5L19 7"
-                          stroke="currentColor"
-                          strokeWidth="2"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        />
-                      </svg>
-                      {t("restore.fileSuccess")}
-                    </p>
-                  )}
-                  {restoreFileError && (
-                    <p className="mt-2 text-xs text-amber-700" role="alert">
-                      {restoreFileError === "nokey"
-                        ? t("restoreFile.noKey")
-                        : restoreFileError === "unsupported"
-                          ? t("restoreFile.unsupported")
-                          : restoreFileError === "toobig"
-                            ? t("restoreFile.tooLarge")
-                            : t("restoreFile.generic")}
-                    </p>
-                  )}
-                  {restoreUnmatched > 0 && (
-                    <p className="mt-2 text-xs text-amber-700">
-                      {t("restore.unmatched", { count: restoreUnmatched })}
-                    </p>
-                  )}
-                </div>
-              )}
+                  </div>
+                )}
+              </div>
             </div>
           </details>
         </section>
