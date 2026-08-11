@@ -21,9 +21,12 @@
 import type { AnonymizeResult, EntityType, Span } from "@engine/types";
 import { anonymizeDeterministic, detectDeterministic } from "@engine/pipeline";
 import { applyOverlay, toReplacements, type Segment } from "@engine/overlay";
+import { anonymize as anonymizeSpans } from "@engine/anonymize";
+import { resolveOverlaps } from "@engine/resolve";
+import { leakSpans } from "@engine/heal";
 import { decodeXml, encodeXml } from "@engine/xml";
 import { officeLeakScan } from "@engine/officeVerify";
-import { layerB } from "@engine/pdfVerify";
+import { layerB, textLeaks } from "@engine/pdfVerify";
 import { sanitizeOfficeMetadata } from "./officeSanitize";
 import { extractText } from "./extract";
 // Type-only (erased at runtime) — avoids an officeRedact <-> scanRedact require cycle.
@@ -279,7 +282,20 @@ async function redactParts(
     }
   }
 
-  const result = await anonymize(concat);
+  let result = await anonymize(concat);
+  // SELF-HEAL the redactable-part text before writing it back: a label-gated value caught only at its label
+  // can reappear in a different FORMAT elsewhere in the concatenated text (e.g. "31-847-205" vs the
+  // "31847205" that was keyed at "דרכון"), which exact-surface completion misses. leakSpans locates those
+  // remaining occurrences (separator-robust / whole-word, matching the leak-scan) so re-anonymizing covers
+  // them; placeholders stay stable. This clears the common office survivor before the fail-closed scan below.
+  const survivors = textLeaks(result.anonymizedText.replace(/[[\]]/g, "x"), "", result.key.map((row) => row.original));
+  if (survivors.length > 0) {
+    const rows = result.key.filter((row) => survivors.includes(row.original));
+    const heal = leakSpans(concat, rows);
+    if (heal.length > 0) {
+      result = anonymizeSpans(concat, resolveOverlaps([...result.spans, ...heal]));
+    }
+  }
   const rewritten = applyOverlay(concat, segments, toReplacements(concat, result));
 
   // Splice per part, from the last region to the first so earlier offsets stay valid.

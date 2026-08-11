@@ -56,10 +56,17 @@ export function detectDeterministic(text: string): Span[] {
   });
 }
 
-/** Deterministic-only anonymize: detect → resolve overlaps → anonymize. Instant (no model). */
+/**
+ * Deterministic-only anonymize: detect → complete occurrences → resolve → anonymize. Instant (no model).
+ * Occurrence-completion matters here too: a label-gated value (passport/bar/checksum-invalid id/company) is
+ * detected only AT its label, so a second occurrence WITHOUT the label would otherwise survive — and on a
+ * path without completion (docx/xlsx) that survivor trips the output leak-scan and refuses the file. Redact
+ * every whole-word occurrence of each detected value so a repeat is covered, exactly like anonymizeWith.
+ */
 export function anonymizeDeterministic(text: string): AnonymizeResult {
-  const resolved = resolveOverlaps(detectDeterministic(text));
-  return anonymize(text, resolved);
+  const base = resolveOverlaps(detectDeterministic(text));
+  const completed = completeOccurrences(text, base);
+  return anonymize(text, resolveOverlaps([...base, ...completed]));
 }
 
 /**
