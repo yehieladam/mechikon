@@ -13,6 +13,7 @@ import { israeliIdRecognizer } from "./recognizers/israeliId";
 import { israeliPhoneRecognizer } from "./recognizers/israeliPhone";
 import { israeliCompanyRecognizer } from "./recognizers/israeliCompany";
 import { labeledRecognizer } from "./recognizers/labeled";
+import { israeliOrgRecognizer } from "./recognizers/israeliOrg";
 import { israeliIbanRecognizer } from "./recognizers/israeliIban";
 import { israeliCaseRecognizer } from "./recognizers/israeliCase";
 import { israeliLandRecognizer } from "./recognizers/israeliLand";
@@ -32,6 +33,7 @@ export const DETERMINISTIC_RECOGNIZERS: readonly Recognizer[] = [
   israeliPolicyRecognizer,
   israeliInsuredRecognizer,
   emailRecognizer,
+  israeliOrgRecognizer,
 ];
 
 /**
