@@ -5,7 +5,7 @@
  * but survived elsewhere, tripping the scan and blocking output.
  */
 import { describe, expect, it } from "vitest";
-import { anonymizeWith } from "./pipeline";
+import { anonymizeWith, anonymizeDeterministic } from "./pipeline";
 import { anonymize } from "./anonymize";
 import { resolveOverlaps } from "./resolve";
 import { leakSpans } from "./heal";
@@ -48,6 +48,37 @@ describe("output leak-scan is clean after anonymizeWith (no self-verify refusal)
 
   it("a recurring full birth date is redacted everywhere it appears", () => {
     expect(survivors("יליד 14.07.1981, הפגישה נקבעה ל-14.07.1981")).toEqual([]);
+  });
+});
+
+describe("office path (anonymizeDeterministic) — occurrence-completion + concat self-heal", () => {
+  /** Survivors on the deterministic (docx/xlsx) path, after its occurrence-completion. */
+  function detSurvivors(text: string): string[] {
+    const r = anonymizeDeterministic(text);
+    return textLeaks(neutralize(r.anonymizedText), "", r.key.map((row) => row.original));
+  }
+  /** Survivors on the office path AFTER the redactParts concat self-heal. */
+  function detSurvivorsAfterHeal(text: string): string[] {
+    let r = anonymizeDeterministic(text);
+    let leaked = textLeaks(neutralize(r.anonymizedText), "", r.key.map((row) => row.original));
+    if (leaked.length > 0) {
+      const rows = r.key.filter((row) => leaked.includes(row.original));
+      const heal = leakSpans(text, rows);
+      r = anonymize(text, resolveOverlaps([...r.spans, ...heal]));
+      leaked = textLeaks(neutralize(r.anonymizedText), "", r.key.map((row) => row.original));
+    }
+    return leaked;
+  }
+
+  it("a repeated same-format label-gated value is globalized (occurrence-completion)", () => {
+    // Before completion on this path, "31847205" was caught only at the דרכון label and the repeat survived.
+    expect(detSurvivors("דרכון 31847205 של הנתבע, ובהמשך 31847205 שוב")).toEqual([]);
+  });
+
+  it("a formatting-variant repeat is cleared by the concat self-heal", () => {
+    const doc = "דרכון 31847205 של הנתבע, ובהמשך 31-847-205 שוב";
+    expect(detSurvivors(doc)).toEqual(["31847205"]); // variant survives completion
+    expect(detSurvivorsAfterHeal(doc)).toEqual([]); // healed
   });
 });
 
