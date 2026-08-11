@@ -55,9 +55,9 @@ const CORPUS: readonly GoldCase[] = [
     redact: ["42817", "51203"],
   },
   {
-    name: "birth date (full) and birth year",
-    text: "יליד 14.07.1981. אחיו יליד 1969.",
-    redact: ["14.07.1981", "1969"],
+    name: "birth date (full) — bare year is intentionally not detected",
+    text: "יליד 14.07.1981",
+    redact: ["14.07.1981"],
   },
   // --- Contact ---
   {

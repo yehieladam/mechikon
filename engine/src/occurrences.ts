@@ -55,12 +55,6 @@ export function completeOccurrences(text: string, spans: readonly Span[]): Span[
       continue;
     }
     seen.add(dedupeKey);
-    // A bare birth YEAR (label-gated DATE_OF_BIRTH like "1969") is low-entropy: the same 4 digits recur as
-    // a contract year, clause number, or amount elsewhere in the document. Redact only the labeled
-    // occurrence, never every occurrence — so globalizing it here would over-redact unrelated years.
-    if (span.type === "DATE_OF_BIRTH" && /^\d{1,4}$/.test(surface)) {
-      continue;
-    }
     for (let from = text.indexOf(surface); from !== -1; from = text.indexOf(surface, from + 1)) {
       const end = from + surface.length;
       if (isWholeWord(text, from, end)) {
