@@ -77,20 +77,24 @@ describe("persistence", () => {
   });
 });
 
+// The full "identifiers" family — sourced from FAMILY_TYPES so adding a member type does not require
+// editing every assertion here (the previous hardcoded {ID, COMPANY} broke when passport/bar/DOB joined).
+const IDENTIFIERS = new Set<EntityType>(FAMILY_TYPES.identifiers);
+
 describe("toggleFamily", () => {
   it("disables every member type when the family is currently enabled", () => {
     const next = toggleFamily([], "identifiers");
-    expect(new Set(next)).toEqual(new Set<EntityType>(["ISRAELI_ID", "IL_COMPANY"]));
+    expect(new Set(next)).toEqual(IDENTIFIERS);
   });
 
   it("re-enables the whole family when every member is already disabled", () => {
-    const next = toggleFamily(["ISRAELI_ID", "IL_COMPANY"], "identifiers");
+    const next = toggleFamily([...FAMILY_TYPES.identifiers], "identifiers");
     expect(next).toEqual([]);
   });
 
   it("disables a partially-disabled family fully (any-enabled -> all-disabled)", () => {
     const next = toggleFamily(["ISRAELI_ID"], "identifiers");
-    expect(new Set(next)).toEqual(new Set<EntityType>(["ISRAELI_ID", "IL_COMPANY"]));
+    expect(new Set(next)).toEqual(IDENTIFIERS);
   });
 
   it("does not mutate the input array", () => {
@@ -110,7 +114,7 @@ describe("toggleFamily", () => {
 describe("isFamilyDisabled", () => {
   it("is true only when every member type is disabled", () => {
     expect(isFamilyDisabled(["ISRAELI_ID"], "identifiers")).toBe(false);
-    expect(isFamilyDisabled(["ISRAELI_ID", "IL_COMPANY"], "identifiers")).toBe(true);
+    expect(isFamilyDisabled([...FAMILY_TYPES.identifiers], "identifiers")).toBe(true);
     expect(isFamilyDisabled(["PERSON"], "people")).toBe(true);
   });
 });
