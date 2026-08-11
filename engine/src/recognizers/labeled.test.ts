@@ -45,13 +45,10 @@ describe("labeledRecognizer", () => {
     expect(values("נכון ליום 12.02.2026", "DATE_OF_BIRTH")).toEqual([]);
   });
 
-  it("flags a bare birth YEAR after יליד / ילידת / נולד", () => {
-    expect(values("יליד 1969", "DATE_OF_BIRTH")).toEqual(["1969"]);
-    expect(values("ילידת 1959", "DATE_OF_BIRTH")).toEqual(["1959"]);
-    expect(values("נולד 1948", "DATE_OF_BIRTH")).toEqual(["1948"]);
-  });
-
-  it("does NOT read the plural ילידי (natives of) as a birth year, nor a plain year", () => {
+  it("does NOT detect a bare birth YEAR (weak PII; only a full date is matched)", () => {
+    // A bare 4-digit year collides with contract years / clause numbers, so it is intentionally not
+    // detected — redacting every occurrence over-redacts, redacting one leaves a leak-scan survivor.
+    expect(values("יליד 1969", "DATE_OF_BIRTH")).toEqual([]);
     expect(values("ילידי שנות ה-2000 בישראל", "DATE_OF_BIRTH")).toEqual([]);
     expect(values("חוזה משנת 2024", "DATE_OF_BIRTH")).toEqual([]);
   });
@@ -81,12 +78,12 @@ describe("labeledRecognizer", () => {
     expect(values("יליד 14/07/1981", "DATE_OF_BIRTH")).toEqual(["14/07/1981"]);
   });
 
-  it("redacts a bare birth year only at the labeled occurrence, not every occurrence in the document", () => {
-    // A 4-digit year is low-entropy: occurrence-completion must NOT globalize it onto an unrelated
-    // contract year elsewhere in the document.
+  it("does not tokenize a bare birth year at all, so a recurring year never trips the leak-scan", () => {
+    // Regression for the production refusal: a bare year is not detected, so it is not a key needle and
+    // cannot survive in the output as a leak — the file is produced normally.
     const out = anonymizeDeterministic("הנתבע יליד 1969 וההסכם נחתם בשנת 1969").anonymizedText;
-    expect(out).toContain("[DOB_1]");
-    expect(out).toContain("בשנת 1969"); // the contract year survives
+    expect(out).not.toContain("[DOB");
+    expect(out).toContain("יליד 1969");
   });
 
   it("does NOT read תזמורת / חפץ as ID / company labels", () => {

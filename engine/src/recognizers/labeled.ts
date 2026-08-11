@@ -76,23 +76,16 @@ const RULES: readonly LabelRule[] = [
     window: 12,
   },
   // Birth date — יליד / ילידת / נולד / ת. לידה / תאריך לידה. Gated to a birth label so ordinary dates in the
-  // document (filing date, "נכון ליום …") are left alone.
+  // document (filing date, "נכון ליום …") are left alone. Only a FULL date (dd.mm.yyyy) is matched: a bare
+  // 4-digit birth YEAR is intentionally NOT detected — it is weak PII that collides with contract years /
+  // clause numbers across a document, so redacting every occurrence over-redacts, while redacting only the
+  // labeled one leaves a survivor that the output leak-scan (pdfVerify) treats as a leak and refuses the
+  // whole file. A full date does not collide that way and completes cleanly.
   {
     entity: "DATE_OF_BIRTH",
     label: /(?:יליד(?:ת|ה)?|נולד(?:ה)?|תארי?ך\s+לידה|ת\.?\s*לידה)/g,
     value: /\d{1,2}[./-]\d{1,2}[./-]\d{2,4}/,
     window: 20,
-  },
-  // Birth YEAR only — "יליד 1969" / "ילידת 1959". The `(?=\s)` after the singular verb blocks the plural
-  // "ילידי" ("natives of …", not a personal birth date). The tight 8-char window keeps a stray nearby year
-  // from being mistaken for a birth year, and stops it double-firing on a full date the rule above handles.
-  {
-    entity: "DATE_OF_BIRTH",
-    label: /(?:יליד[תה]?|נולד[הו]?)(?=\s)/g,
-    // `(?<![\d./-])` so a year that is the TAIL of a full date ("14.07.1981") is left to the full-date rule
-    // above and not double-matched as a bare year (the wider VALUE_MARGIN slice can now reach it).
-    value: /(?<![\d./-])(?:19|20)\d{2}(?!\d)/,
-    window: 8,
   },
 ];
 
