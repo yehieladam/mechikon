@@ -12,6 +12,7 @@
  * normalised (separators stripped, +972/972 trunk → leading 0) before validation.
  */
 import type { Recognizer, Span } from "../types";
+import { HWS } from "./separators";
 
 /** 05x + 7 digits, or 07[2-9] + 7 digits (10 digits). */
 const MOBILE = /^0(?:5\d|7[2-9])\d{7}$/;
@@ -36,8 +37,16 @@ export function isValidIsraeliPhone(raw: string): boolean {
  * "(02) 624-1234" and double spaces are tolerated (M-format). `(?<![\w+])` / `(?![\w])` still stop it
  * from biting into a longer digit run (an account number or a 9-digit ID that does not start 0/972);
  * normalize() strips every non-digit before the numbering-plan check.
+ *
+ * Separators between groups are the shared HWS set (horizontal whitespace incl. NBSP, never a line break)
+ * plus hyphen/dot/parens — so "(02) 624-1234", an NBSP-joined Word phone, and "052-1234567" all match, but
+ * a phone at a line end can't swallow the next line's leading digit. See separators.ts for why `\s` is wrong.
  */
-const PHONE_CANDIDATE = /(?<![\w+])\(?(?:\+?972[-.\s()]{0,2}|0)(?:\d[-.\s()]{0,2}){7,9}\d(?![\w])/g;
+const PHONE_SEP = `[-.${HWS}()]`;
+const PHONE_CANDIDATE = new RegExp(
+  `(?<![\\w+])\\(?(?:\\+?972${PHONE_SEP}{0,2}|0)(?:\\d${PHONE_SEP}{0,2}){7,9}\\d(?![\\w])`,
+  "g",
+);
 
 /** Flags Israeli phone numbers (mobile + landline, national and +972 forms). */
 export const israeliPhoneRecognizer: Recognizer = {

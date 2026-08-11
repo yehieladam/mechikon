@@ -1,5 +1,5 @@
 /**
- * Category-control layer — groups the 14 engine EntityTypes into 6 toggleable color FAMILIES (plus MANUAL,
+ * Category-control layer — groups the engine EntityTypes into 6 toggleable color FAMILIES (plus MANUAL,
  * which is never toggleable). The user disables families they do not want redacted; the disabled set is
  * persisted and threaded into the engine as `disabledTypes`. Framework-free (no React) so it stays unit-
  * testable and reusable. Colors are 3 base hues x 2 shades — see tailwind.config.js `cat-*` tokens.
@@ -17,7 +17,7 @@ export type CategoryFamily =
 
 /** Family -> its member EntityTypes. MANUAL is intentionally absent (never toggleable). */
 export const FAMILY_TYPES: Readonly<Record<CategoryFamily, readonly EntityType[]>> = {
-  identifiers: ["ISRAELI_ID", "IL_COMPANY"],
+  identifiers: ["ISRAELI_ID", "IL_COMPANY", "IL_PASSPORT", "IL_BAR", "DATE_OF_BIRTH"],
   financial: ["IL_IBAN", "IL_POLICY", "IL_INSURED", "IL_CASE", "IL_LAND"],
   people: ["PERSON"],
   places: ["LOCATION", "ORGANIZATION"],

@@ -88,6 +88,9 @@ export const he = {
     id: "ת״ז",
     phone: "טלפון",
     company: "ח״פ",
+    passport: "דרכון",
+    bar: "מ״ר עו״ד",
+    dob: "תאריך לידה",
     iban: "חשבון",
     case: "תיק",
     land: "גוש/חלקה",
@@ -100,7 +103,7 @@ export const he = {
   category: {
     legend: "בחרו אילו סוגי מידע להשחיר",
     hint: "קטגוריה שכבויה נשארת גלויה בטקסט המושחר.",
-    familyIdentifiers: "מזהים (ת״ז, ח״פ)",
+    familyIdentifiers: "מזהים (ת״ז, ח״פ, דרכון, מ״ר, תאריך לידה)",
     familyFinancial: "פיננסי ומשפטי (חשבון, פוליסה, תיק, גוש/חלקה)",
     familyPeople: "שמות",
     familyPlaces: "מקומות וארגונים",

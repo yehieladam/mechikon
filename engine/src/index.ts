@@ -20,6 +20,8 @@ export { PRIORITY } from "./types";
 export { isValidIsraeliId, israeliIdRecognizer } from "./recognizers/israeliId";
 export { isValidIsraeliPhone, israeliPhoneRecognizer } from "./recognizers/israeliPhone";
 export { isValidIsraeliCompany, israeliCompanyRecognizer } from "./recognizers/israeliCompany";
+export { labeledRecognizer } from "./recognizers/labeled";
+export { israeliOrgRecognizer } from "./recognizers/israeliOrg";
 export { isValidIsraeliIban, israeliIbanRecognizer } from "./recognizers/israeliIban";
 export { israeliCaseRecognizer } from "./recognizers/israeliCase";
 export { israeliLandRecognizer } from "./recognizers/israeliLand";

@@ -7,9 +7,13 @@
  */
 import type { Recognizer, Span } from "../types";
 
-/** פוליסה / פוליסת (מספר | מס׳)? <token> — token may contain digits, hyphens, slashes. */
+/**
+ * פוליסה / פוליסת [ביטוח] (מספר | מס׳ | שמספרה)? <token> — token may contain digits, hyphens, slashes.
+ * The optional "ביטוח" and "שמספרה" cover the two most common real phrasings ("פוליסת ביטוח מס׳ …",
+ * "פוליסה שמספרה …") that the bare keyword form missed.
+ */
 const POLICY_CONTEXT =
-  /פוליס(?:ה|ת)(?:\s+(?:מספר|מס['׳]?))?\s+(\d[\d\-/]{3,19})/g;
+  /פוליס(?:ה|ת)(?:\s+ביטוח)?(?:\s+(?:מספר|מס['׳]?|שמספרה))?\s+(\d[\d\-/]{3,19})/g;
 
 /** Flags numbers introduced by the keyword פוליסה. */
 export const israeliPolicyRecognizer: Recognizer = {

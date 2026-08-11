@@ -65,4 +65,13 @@ describe("israeliIbanRecognizer", () => {
     expect(spans).toHaveLength(1);
     expect(text.slice(spans[0].start, spans[0].end)).toBe(text);
   });
+
+  it("does not let a newline act as an in-number separator (no cross-line over-match)", () => {
+    // The IBAN sits on its own line; the next line starts with digits. A \s separator would consume the
+    // newline, overrun 19 groups / fail mod-97, and leak the IBAN. The horizontal-only separator stops it.
+    const text = "IL620108000000099999999\n12345 המשך";
+    const spans = israeliIbanRecognizer.recognize(text);
+    expect(spans).toHaveLength(1);
+    expect(text.slice(spans[0].start, spans[0].end)).toBe("IL620108000000099999999");
+  });
 });

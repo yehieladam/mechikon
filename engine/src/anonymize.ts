@@ -22,6 +22,9 @@ import { normalizePlaceholder, normalizedPlaceholdersIn } from "./restore";
 const LABELS: Readonly<Record<EntityType, string>> = {
   ISRAELI_ID: "ID",
   IL_COMPANY: "COMPANY",
+  IL_PASSPORT: "PASSPORT",
+  IL_BAR: "BAR",
+  DATE_OF_BIRTH: "DOB",
   IL_PHONE: "PHONE",
   IL_IBAN: "IBAN",
   IL_CASE: "CASE",

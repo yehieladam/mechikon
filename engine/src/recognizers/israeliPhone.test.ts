@@ -92,5 +92,31 @@ describe("israeliPhoneRecognizer", () => {
       expect(spans).toHaveLength(1);
       expect(spans[0].type).toBe("IL_PHONE");
     });
+
+    it("does NOT swallow the next line's leading digit (numbered clauses)", () => {
+      // A newline must not act as an in-number separator: "...052-1234567\n8. ..." would otherwise
+      // overflow the numbering plan and leak the whole phone. Common in numbered legal documents.
+      const spans = israeliPhoneRecognizer.recognize("7. טלפון 052-1234567\n8. ביום 15.3.2024");
+      expect(spans).toHaveLength(1);
+      expect(spans[0].type).toBe("IL_PHONE");
+    });
+
+    it("treats NBSP / narrow-NBSP as in-number separators (Word/PDF keep-together spaces)", () => {
+      const nbsp = String.fromCharCode(0x00a0);
+      const narrow = String.fromCharCode(0x202f);
+      expect(isValidIsraeliPhone(`03${nbsp}624${nbsp}1234`)).toBe(true);
+      const spans = israeliPhoneRecognizer.recognize(`נייד 052${narrow}123${narrow}4567`);
+      expect(spans).toHaveLength(1);
+      expect(spans[0].type).toBe("IL_PHONE");
+    });
+
+    it("does NOT cross a Unicode LINE/PARAGRAPH separator (U+2028/U+2029) into the next number", () => {
+      // Guard against a fix that uses \s or [^\S\n\r]: both admit U+2028/U+2029 and re-open the leak.
+      for (const sep of [String.fromCharCode(0x2028), String.fromCharCode(0x2029)]) {
+        const spans = israeliPhoneRecognizer.recognize(`052-1234567${sep}8`);
+        expect(spans).toHaveLength(1);
+        expect(spans[0].end - spans[0].start).toBe("052-1234567".length);
+      }
+    });
   });
 });

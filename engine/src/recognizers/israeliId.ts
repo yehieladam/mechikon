@@ -7,6 +7,7 @@
  * divisible by 10. Detection is regex + checksum ONLY (CLAUDE.md hard rule 1).
  */
 import type { Recognizer, Span } from "../types";
+import { HWS } from "./separators";
 
 const ALL_ZEROS = "000000000";
 const ID_LENGTH = 9;
@@ -46,8 +47,10 @@ const NINE_DIGIT_RUN = /(?<!\d)\d{9}(?!\d)/g;
  * context). Covers ת"ז / ת.ז, תעודת זהות, מספר זהות, ז.ת.
  */
 const ID_CONTEXT = /(?:ת["'׳״.]ז|תעודת\s+זהות|מספר\s+זהות|ז\s*\.\s*ת)/g;
-/** 7..9 digits with optional single -, ., space separators (a dropped-zero 8-digit or a grouped ID). */
-const CONTEXT_CANDIDATE = /\d(?:[-.\s]?\d){6,8}/;
+/** 7..9 digits with optional single -, ., horizontal-space separators (a dropped-zero 8-digit or a grouped
+ *  ID). Separator is the shared HWS set (horizontal whitespace incl. NBSP, never a line break) + hyphen/dot;
+ *  a `\s` here would let the run cross a newline into the next line's digit. See separators.ts. */
+const CONTEXT_CANDIDATE = new RegExp(`\\d(?:[-.${HWS}]?\\d){6,8}`);
 /** How far after the label to look for the value (a few words of Hebrew + punctuation). */
 const CONTEXT_WINDOW = 25;
 
@@ -76,8 +79,11 @@ export const israeliIdRecognizer: Recognizer = {
     }
     for (const context of text.matchAll(ID_CONTEXT)) {
       const from = context.index + context[0].length;
-      const candidate = CONTEXT_CANDIDATE.exec(text.slice(from, from + CONTEXT_WINDOW));
-      if (candidate === null) {
+      // Slice a margin past the window so a labeled ID near the window edge is matched WHOLE — a truncated
+      // 8-of-9-digit prefix can still pass the checksum and leak the final digit. The start-gate keeps only
+      // values beginning within CONTEXT_WINDOW.
+      const candidate = CONTEXT_CANDIDATE.exec(text.slice(from, from + CONTEXT_WINDOW + 40));
+      if (candidate === null || candidate.index >= CONTEXT_WINDOW) {
         continue;
       }
       const digitCount = candidate[0].replace(/\D/g, "").length;
