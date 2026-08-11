@@ -6,13 +6,31 @@
  */
 import { describe, expect, it } from "vitest";
 import { anonymizeWith } from "./pipeline";
+import { anonymize } from "./anonymize";
+import { resolveOverlaps } from "./resolve";
+import { leakSpans } from "./heal";
 import { textLeaks } from "./pdfVerify";
+
+const neutralize = (text: string): string => text.replace(/[[\]]/g, "x");
 
 /** Values from the key that still appear in the output (empty = the file is produced). */
 function survivors(text: string): string[] {
   const result = anonymizeWith(text, [], [], []);
   const needles = [...new Set(result.key.map((row) => row.original))];
-  return textLeaks(result.anonymizedText, "", needles);
+  return textLeaks(neutralize(result.anonymizedText), "", needles);
+}
+
+/** Survivors remaining AFTER the worker self-heal (locate + span the survivor, re-anonymize). */
+function survivorsAfterHeal(text: string): string[] {
+  let result = anonymizeWith(text, [], [], []);
+  let leaked = textLeaks(neutralize(result.anonymizedText), "", result.key.map((r) => r.original));
+  if (leaked.length > 0) {
+    const rows = result.key.filter((r) => leaked.includes(r.original));
+    const heal = leakSpans(text, rows);
+    result = anonymize(text, resolveOverlaps([...result.spans, ...heal]));
+    leaked = textLeaks(neutralize(result.anonymizedText), "", result.key.map((r) => r.original));
+  }
+  return leaked;
 }
 
 describe("output leak-scan is clean after anonymizeWith (no self-verify refusal)", () => {
@@ -30,5 +48,15 @@ describe("output leak-scan is clean after anonymizeWith (no self-verify refusal)
 
   it("a recurring full birth date is redacted everywhere it appears", () => {
     expect(survivors("יליד 14.07.1981, הפגישה נקבעה ל-14.07.1981")).toEqual([]);
+  });
+});
+
+describe("self-heal clears a formatting-variant survivor instead of refusing the file", () => {
+  it("a label-gated passport that reappears in a different format is healed, not refused", () => {
+    // "31847205" is caught only at the דרכון label; the reformatted "31-847-205" survives exact-surface
+    // completion → old behavior threw TEXT_SELFVERIFY_FAILED and black-holed the file. Self-heal redacts it.
+    const doc = "דרכון 31847205 של הנתבע. מופיע שוב: 31-847-205 בהמשך.";
+    expect(survivors(doc)).toEqual(["31847205"]); // would have refused
+    expect(survivorsAfterHeal(doc)).toEqual([]); // healed → file produced
   });
 });

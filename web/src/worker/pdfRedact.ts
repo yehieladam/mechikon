@@ -17,6 +17,9 @@ import {
 import { toReplacements } from "@engine/overlay";
 import type { AnonymizeResult } from "@engine/types";
 import { highConfidenceSurvivors, layerB, layerC, textLeaks } from "@engine/pdfVerify";
+import { anonymize as anonymizeSpans } from "@engine/anonymize";
+import { resolveOverlaps } from "@engine/resolve";
+import { leakSpans } from "@engine/heal";
 import type { KeyRow } from "@engine/types";
 import type { RedactedFile, Anonymize } from "./officeRedact";
 import {
@@ -379,21 +382,25 @@ export async function redactPdf(buffer: ArrayBuffer, anonymize: Anonymize): Prom
     produced = await redactIntoBytes(mupdf, doc, anonymize);
   } finally {
     // WASM heap is not GC'd — release the (multi-MB) parsed document on every path, including the
-    // NO_TEXT_LAYER / TEXT_SELFVERIFY_FAILED throws, BEFORE the verify pass opens its own document.
-    // Only JS-owned copies escape redactIntoBytes (never a live WASM view), so this is safe.
+    // NO_TEXT_LAYER throw, BEFORE the verify pass opens its own document. (The text self-verify no longer
+    // throws — it self-heals; see redactIntoBytes.) Only JS-owned copies escape (never a live WASM view).
     doc.destroy();
   }
-  const { result, bytes, unverifiedImagePages } = produced;
+  const { result, bytes, unverifiedImagePages, textSurvivors } = produced;
   // VISUAL self-verify: gates only whether we can CERTIFY the redacted PDF clean. On failure we no longer
   // withhold the file — the owner reviews the preview and can add missed terms — but we surface a warning
   // (pdfUnverified) so the download is an INFORMED choice, not a blind one. The warning is SOFT and
   // HIGH-CONFIDENCE only (B2): it fires when a structured value or a full multi-token name surface
-  // genuinely survived, never on a short fragment's coincidental substring match (the #90 noise). The
-  // Word deliverable is already hard-verified. layerB/layerC (byte + structure) still ran inside
-  // selfVerify.
+  // genuinely survived, never on a short fragment's coincidental substring match (the #90 noise). Any
+  // residual "Word for AI" text survivor left after self-heal (e.g. a reversed RTL artifact) is merged in
+  // here too — so the file is always produced with an informed warning, never refused. layerB/layerC
+  // (byte + structure) still ran inside selfVerify.
   const verify = await selfVerify(bytes, result.key);
+  const warnTerms = [...new Set([...verify.terms, ...textSurvivors])];
   const pdfUnverified =
-    verify.terms.length > 0 ? { reason: verify.detail, terms: verify.terms } : undefined;
+    warnTerms.length > 0
+      ? { reason: `${verify.detail} textHeal=${textSurvivors.join(",") || "ok"}`, terms: warnTerms }
+      : undefined;
   return {
     bytes,
     result,
@@ -407,6 +414,9 @@ interface ProducedPdf {
   readonly result: AnonymizeResult;
   readonly bytes: Uint8Array;
   readonly unverifiedImagePages: number[];
+  /** Key values that STILL survived in the "Word for AI" text after self-heal (e.g. a reversed RTL
+   *  artifact) — surfaced as a warning so the file is produced, never refused. Empty in the normal case. */
+  readonly textSurvivors: string[];
 }
 
 /** The doc-scoped body of redactPdf — everything that touches the open mupdf document. Split out so
@@ -450,17 +460,29 @@ async function redactIntoBytes(mupdf: any, doc: any, anonymize: Anonymize): Prom
     fieldRanges.push({ start, end: combined.length, field });
   }
 
-  const result: AnonymizeResult = await anonymize(combined);
-  // TEXT self-verify (hard gate, always): the tokenized "Word for AI" text must not contain any detected
-  // original. This deliverable is string-overlay, independent of the visual PDF's quad redaction, so it is
-  // clean even when the visual redaction misses a glyph; a failure here is a real overlay bug → refuse.
-  // Neutralize placeholder brackets first ("[" / "]" -> word char): tokenizing a value ADJACENT to a
-  // needle can otherwise forge a whole-word boundary (e.g. "טל03…" -> "טל[PHONE_4]"), a false positive —
-  // the needle was correctly never a span (glued to a digit in the original), only the token isolates it.
-  const aiText = result.anonymizedText.replace(/[[\]]/g, "x");
-  if (textLeaks(aiText, "", result.key.map((row) => row.original)).length > 0) {
-    throw new Error(TEXT_SELFVERIFY_FAILED);
+  let result: AnonymizeResult = await anonymize(combined);
+  // TEXT self-verify + SELF-HEAL (never refuse). The tokenized "Word for AI" text must not contain any
+  // detected original. Neutralize placeholder brackets first ("[" / "]" -> word char): tokenizing a value
+  // ADJACENT to a needle can otherwise forge a whole-word boundary (e.g. "טל03…" -> "טל[PHONE_4]"), a false
+  // positive — the needle was correctly never a span, only the token isolates it.
+  const neutralize = (text: string): string => text.replace(/[[\]]/g, "x");
+  const originals = (r: AnonymizeResult): string[] => r.key.map((row) => row.original);
+  let survivors = textLeaks(neutralize(result.anonymizedText), "", originals(result));
+  if (survivors.length > 0) {
+    // A survivor is a value we ALREADY know (it has a key row). Rather than black-hole the whole file,
+    // locate its remaining occurrences (separator-robust for numbers, whole-word for names) and redact
+    // them too, then re-anonymize so BOTH the string deliverable and the PDF quads cover them. Placeholders
+    // stay stable (same value -> same token), so the restore key remains coherent. See engine/heal.ts.
+    const survivorRows = result.key.filter((row) => survivors.includes(row.original));
+    const heal = leakSpans(combined, survivorRows);
+    if (heal.length > 0) {
+      result = anonymizeSpans(combined, resolveOverlaps([...result.spans, ...heal]));
+      survivors = textLeaks(neutralize(result.anonymizedText), "", originals(result));
+    }
   }
+  // Anything STILL surviving (e.g. a reversed RTL visual-order artifact we cannot span in logical order) is
+  // surfaced as a warning by the caller — the file is produced, never refused.
+  const textSurvivors = survivors;
   const replacements = toReplacements(combined, result);
   const bodyEnd = mapped.text.length;
 
@@ -529,6 +551,6 @@ async function redactIntoBytes(mupdf: any, doc: any, anonymize: Anonymize): Prom
   // asUint8Array() is a live view into WASM memory — the caller destroys this document and the
   // self-verify re-opens mupdf, either of which would clobber it. Copy into a JS-owned buffer now.
   const bytes = new Uint8Array(doc.saveToBuffer(SAFE_SAVE_OPTIONS).asUint8Array());
-  return { result, bytes, unverifiedImagePages };
+  return { result, bytes, unverifiedImagePages, textSurvivors };
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
