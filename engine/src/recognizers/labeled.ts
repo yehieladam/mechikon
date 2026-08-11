@@ -17,6 +17,7 @@
  * words (תזמורת, חפץ) and the square-meter unit מ״ר (gershayim, no dot) never count as context.
  */
 import type { EntityType, Recognizer, Span } from "../types";
+import { HWS } from "./separators";
 
 interface LabelRule {
   readonly entity: EntityType;
@@ -28,11 +29,16 @@ interface LabelRule {
   readonly window: number;
 }
 
-/** A digit run of `min`..`max` digits, single -/./space separators allowed, not part of a longer run.
- *  Separator is horizontal whitespace only ([ \t]) — a bare `\s` would match a newline and let the run
- *  swallow the next line's leading digit (e.g. a numbered clause), corrupting the value and the layout. */
+/** Extra chars sliced past `window` so a value starting near the window edge is captured whole, never
+ *  truncated (comfortably longer than any value: a 9-digit ID with separators or a dd.mm.yyyy date). */
+const VALUE_MARGIN = 40;
+
+/** A digit run of `min`..`max` digits, single hyphen/horizontal-space (HWS) separators allowed, not part of
+ *  a longer run. NOTE: a dot is deliberately NOT a separator here — otherwise a dotted DATE inside a label
+ *  window ("דרכון ... 12.03.2027") would be captured as that number type. Real ת״ז/ח.פ. use no separator or
+ *  hyphens, never dot-grouping. Separator uses the shared HWS set (never `\s`); see separators.ts. */
 function digits(min: number, max: number): RegExp {
-  return new RegExp(String.raw`(?<!\d)\d(?:[-. \t]?\d){${min - 1},${max - 1}}(?!\d)`);
+  return new RegExp(`(?<!\\d)\\d(?:[-${HWS}]?\\d){${min - 1},${max - 1}}(?!\\d)`);
 }
 
 const RULES: readonly LabelRule[] = [
@@ -83,7 +89,9 @@ const RULES: readonly LabelRule[] = [
   {
     entity: "DATE_OF_BIRTH",
     label: /(?:יליד[תה]?|נולד[הו]?)(?=\s)/g,
-    value: /(?<!\d)(?:19|20)\d{2}(?!\d)/,
+    // `(?<![\d./-])` so a year that is the TAIL of a full date ("14.07.1981") is left to the full-date rule
+    // above and not double-matched as a bare year (the wider VALUE_MARGIN slice can now reach it).
+    value: /(?<![\d./-])(?:19|20)\d{2}(?!\d)/,
     window: 8,
   },
 ];
@@ -97,8 +105,11 @@ export const labeledRecognizer: Recognizer = {
     for (const rule of RULES) {
       for (const label of text.matchAll(rule.label)) {
         const from = label.index + label[0].length;
-        const candidate = rule.value.exec(text.slice(from, from + rule.window));
-        if (candidate === null) {
+        // Slice a MARGIN past the window so a value straddling the window edge is matched WHOLE (not a
+        // truncated prefix whose (?!\d) passes against the slice edge and leaks the tail). The start-gate
+        // below then keeps only values that actually begin within `window`.
+        const candidate = rule.value.exec(text.slice(from, from + rule.window + VALUE_MARGIN));
+        if (candidate === null || candidate.index >= rule.window) {
           continue;
         }
         const start = from + candidate.index;

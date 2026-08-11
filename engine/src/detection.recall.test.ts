@@ -71,6 +71,16 @@ const CORPUS: readonly GoldCase[] = [
     redact: ["03-6241234"],
   },
   {
+    name: "phone with NBSP separators (Word/PDF keep-together spaces)",
+    text: `נייד ${" "}052${" "}123${" "}4567`.replace(/^נייד  /, "נייד "),
+    redact: ["052 123 4567"],
+  },
+  {
+    name: "labeled ID far from its label is captured whole (no truncated-prefix leak)",
+    text: "תעודת זהות של מרשי היא 312345678",
+    redact: ["312345678"],
+  },
+  {
     name: "email",
     text: 'דוא"ל: yossi@example.co.il',
     redact: ["yossi@example.co.il"],
@@ -109,6 +119,8 @@ const NEGATIVES: readonly GoldCase[] = [
   { name: "public bodies (no private suffix)", text: "משרד הבריאות ועיריית תל אביב ובית משפט השלום", redact: [], keep: ["משרד הבריאות", "עיריית תל אביב"] },
   { name: "generic company, not a name", text: 'החברה בע"מ התחייבה', redact: [], keep: ["החברה"] },
   { name: "case prefix used as a place (ת״א = תל אביב)", text: 'רחוב הרצל 12, ת"א 6971022', redact: [], keep: ["6971022"] },
+  { name: "dotted date near a number label is not a number", text: "דרכון בתוקף עד 12.03.2027", redact: [], keep: ["12.03.2027"] },
+  { name: "contract year equal to a birth year elsewhere is not globalized", text: "יליד 1969 וההסכם נחתם בשנת 1969", redact: [], keep: ["בשנת 1969"] },
 ];
 
 describe("deterministic recall gate", () => {

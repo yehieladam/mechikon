@@ -60,6 +60,35 @@ describe("labeledRecognizer", () => {
     expect(values("עוסק מורשה 305873946", "ISRAELI_ID")).toEqual(["305873946"]);
   });
 
+  it("captures the WHOLE ID when filler pushes it near the window edge (no truncated-prefix leak)", () => {
+    // Regression: a value straddling the window edge must be matched whole, not a truncated prefix whose
+    // tail then leaks. '312345678' is checksum-invalid + non-phone-shaped, so only the labeled rule catches it.
+    const text = "תעודת זהות של מרשי היא 312345678";
+    expect(values(text, "ISRAELI_ID")).toEqual(["312345678"]);
+    const out = anonymizeDeterministic(text).anonymizedText;
+    expect(out).toContain("[ID_1]");
+    // No digit of the ID survives (neither the whole value nor a truncated tail like "78").
+    expect(out.replace(/\[ID_1\]/g, "")).not.toMatch(/\d/);
+  });
+
+  it("does NOT capture a dotted DATE inside a label window as a number type", () => {
+    expect(values("דרכון בתוקף עד 12.03.2027", "IL_PASSPORT")).toEqual([]);
+    expect(values("מספר זהות 12.03.2024", "ISRAELI_ID")).toEqual([]);
+  });
+
+  it("does NOT double-match the year inside a full birth date", () => {
+    expect(values("יליד 14.07.1981", "DATE_OF_BIRTH")).toEqual(["14.07.1981"]);
+    expect(values("יליד 14/07/1981", "DATE_OF_BIRTH")).toEqual(["14/07/1981"]);
+  });
+
+  it("redacts a bare birth year only at the labeled occurrence, not every occurrence in the document", () => {
+    // A 4-digit year is low-entropy: occurrence-completion must NOT globalize it onto an unrelated
+    // contract year elsewhere in the document.
+    const out = anonymizeDeterministic("הנתבע יליד 1969 וההסכם נחתם בשנת 1969").anonymizedText;
+    expect(out).toContain("[DOB_1]");
+    expect(out).toContain("בשנת 1969"); // the contract year survives
+  });
+
   it("does NOT read תזמורת / חפץ as ID / company labels", () => {
     const text = "התזמורת ניגנה 123456789 ליד חפץ 987654321";
     expect(values(text, "ISRAELI_ID")).toEqual([]);

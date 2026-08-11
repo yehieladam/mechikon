@@ -19,6 +19,7 @@
 import { PRIORITY, type AnonymizeResult, type EntityType, type Span } from "./types";
 import type { OcrBox, OcrPageResult, OcrWord } from "./ocrTypes";
 import { buildOcrText, unionRect, wordsForRange, type WordRange } from "./ocrMap";
+import { HWS } from "./recognizers/separators";
 
 /** Thrown when a detection span maps to zero word boxes — a PII we cannot locate to redact. */
 export const SCAN_UNMAPPABLE_PII = "SCAN_UNMAPPABLE_PII";
@@ -161,8 +162,10 @@ export function labelAnchorBoxes(words: readonly OcrWord[]): OcrBox[] {
   return labelAnchorRuns(words).map((run) => unionRect([...run.label, ...run.value].map((i) => words[i].bbox)));
 }
 
-/** (B) 8-10 digits with optional single space/hyphen/dot separators, not touching more digits or a slash. */
-const DIGIT_RUN = /(?<![\d/])\d(?:[\s.-]?\d){7,9}(?![\d/])/g;
+/** (B) 8-10 digits with optional single horizontal-space/hyphen/dot separators, not touching more digits or
+ *  a slash. Separator uses the shared HWS set, not `\s`: a `\s` admits a newline, so a run at a line end
+ *  would join the next line's digits into one token/box (distorting layout). See separators.ts. */
+const DIGIT_RUN = new RegExp(`(?<![\\d/])\\d(?:[${HWS}.-]?\\d){7,9}(?![\\d/])`, "g");
 
 /**
  * Merge the A∪B∪C spans into a non-overlapping set by UNION (never drop-the-loser like resolveOverlaps):

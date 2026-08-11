@@ -130,4 +130,13 @@ describe("israeliIdRecognizer — M-2 (anchored separator, no cross-word ת...ז
     const spans = israeliIdRecognizer.recognize("מספר זהות 61234506");
     expect(spans.map((s) => s.type)).toContain("ISRAELI_ID");
   });
+
+  it("captures a grouped ID WHOLE when filler pushes it near the context window edge", () => {
+    // Regression twin of the labeled-window truncation: a grouped valid ID some words after the label must
+    // be captured in full, not as a truncated prefix that leaks its last digit.
+    const text = "תעודת זהות של מרשי היא 12-345-6709";
+    const span = israeliIdRecognizer.recognize(text).find((s) => s.type === "ISRAELI_ID");
+    expect(span).toBeDefined();
+    expect(text.slice(span!.start, span!.end)).toBe("12-345-6709");
+  });
 });
