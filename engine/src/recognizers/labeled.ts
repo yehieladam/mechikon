@@ -80,7 +80,7 @@ const RULES: readonly LabelRule[] = [
   {
     entity: "DATE_OF_BIRTH",
     label: /(?:יליד(?:ת|ה)?|נולד(?:ה)?|תארי?ך\s+לידה|ת\.?\s*לידה)/g,
-    value: /\d{1,2}[.\/-]\d{1,2}[.\/-]\d{2,4}/,
+    value: /\d{1,2}[./-]\d{1,2}[./-]\d{2,4}/,
     window: 20,
   },
   // Birth YEAR only — "יליד 1969" / "ילידת 1959". The `(?=\s)` after the singular verb blocks the plural
