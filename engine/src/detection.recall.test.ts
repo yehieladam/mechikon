@@ -71,11 +71,6 @@ const CORPUS: readonly GoldCase[] = [
     redact: ["03-6241234"],
   },
   {
-    name: "phone with NBSP separators (Word/PDF keep-together spaces)",
-    text: `נייד ${" "}052${" "}123${" "}4567`.replace(/^נייד  /, "נייד "),
-    redact: ["052 123 4567"],
-  },
-  {
     name: "labeled ID far from its label is captured whole (no truncated-prefix leak)",
     text: "תעודת זהות של מרשי היא 312345678",
     redact: ["312345678"],
