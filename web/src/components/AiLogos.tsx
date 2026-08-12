@@ -17,33 +17,40 @@ export function OpenAiLogo({ className }: LogoProps) {
   );
 }
 
-/** Google Gemini — the four-point spark, blue-to-purple brand gradient. */
+/**
+ * Google Gemini — the four-point concave "spark" star with Google's blue→purple→pink brand gradient.
+ * NOTE for strict compliance: Google's guidelines require their APPROVED artwork, unmodified. This is a
+ * faithful reproduction of the mark; for a commercial launch, drop Google's official downloaded SVG in
+ * place of this path/gradient (from the Google Brand Resource Center) so it is the exact asset.
+ */
 export function GeminiLogo({ className }: LogoProps) {
   return (
     <svg viewBox="0 0 24 24" width="18" height="18" className={className} aria-hidden="true">
       <defs>
-        <linearGradient id="gemini-grad" x1="0" y1="0" x2="24" y2="24" gradientUnits="userSpaceOnUse">
-          <stop offset="0" stopColor="#4796E3" />
-          <stop offset="0.5" stopColor="#8964E0" />
-          <stop offset="1" stopColor="#B03CD1" />
+        <linearGradient id="gemini-grad" x1="2" y1="4" x2="22" y2="20" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stopColor="#1BA1E3" />
+          <stop offset="0.3" stopColor="#5C4EE5" />
+          <stop offset="0.6" stopColor="#9B72CB" />
+          <stop offset="1" stopColor="#D96570" />
         </linearGradient>
       </defs>
       <path
         fill="url(#gemini-grad)"
-        d="M12 0c.6 6.4 5.6 11.4 12 12-6.4.6-11.4 5.6-12 12-.6-6.4-5.6-11.4-12-12C6.4 11.4 11.4 6.4 12 0z"
+        d="M12 0C12 6.627 6.627 12 0 12c6.627 0 12 5.373 12 12 0-6.627 5.373-12 12-12-6.627 0-12-5.373-12-12z"
       />
     </svg>
   );
 }
 
-/** Anthropic Claude — the sunburst mark, Claude coral. */
+/** Anthropic Claude — the sunburst mark in Claude's Crail coral. */
 export function ClaudeLogo({ className }: LogoProps) {
   return (
     <svg viewBox="0 0 24 24" width="18" height="18" className={className} aria-hidden="true">
-      <g stroke="#D97757" strokeWidth="2.1" strokeLinecap="round">
-        <path d="M12 3v18" />
-        <path d="M3.6 7.5l16.8 9" />
-        <path d="M20.4 7.5l-16.8 9" />
+      <g stroke="#D97757" strokeWidth="2" strokeLinecap="round">
+        <path d="M12 2.5v19" />
+        <path d="M4.65 6.25l14.7 11.5" />
+        <path d="M19.35 6.25L4.65 17.75" />
+        <path d="M2.5 12h19" />
       </g>
     </svg>
   );

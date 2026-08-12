@@ -321,6 +321,9 @@ export function App() {
   // left thinking it worked. Separate flags for the two copy affordances so a message never shows in the
   // wrong place.
   const [copyError, setCopyError] = useState(false);
+  // The copy succeeded but the browser blocked the service tab (window.open returned null): tell the user
+  // to paste manually rather than leave them staring at a tab that never opened.
+  const [popupBlocked, setPopupBlocked] = useState(false);
   const [restoredCopyError, setRestoredCopyError] = useState(false);
   const [fileError, setFileError] = useState(false);
   // Untrusted-input bounds (B8): "size" = the upload is over the byte cap OR a zip that inflates past
@@ -1066,7 +1069,9 @@ export function App() {
   const onCopy = useCallback(async () => {
     // Defense-in-depth: never copy while busy, and never in manual mode with zero redactions (the text
     // would be the untouched original). The JSX also hides the button + disables it while busy.
-    if (!result || busy || (manualOnlyRef.current && result.key.length === 0)) {
+    // Only copy when something was actually redacted; with no key rows anonymizedText === the untouched
+    // original, which must never be handed off for an AI round-trip.
+    if (!result || busy || result.key.length === 0) {
       return;
     }
     setCopyError(false);
@@ -1085,18 +1090,53 @@ export function App() {
     }
   }, [result, busy, t, openRestore]);
 
-  // "Copy and open in <service>": open the AI service tab FIRST (synchronously, inside the click gesture)
-  // so the popup blocker does not swallow it after the async clipboard write in onCopy. We only launch
-  // the tab, never inject text — the user pastes there (no third-party API, no data leaves the browser).
+  // "Copy and open in <service>": copy the redacted text to the clipboard FIRST — while this tab still
+  // has focus — then open the service. window.open shifts focus to the new tab, and a clipboard write
+  // from a blurred tab is rejected ("Document is not focused"); starting the write before the open is why
+  // the text actually lands on the clipboard. We do NOT await before window.open, or the popup blocker
+  // would swallow the tab (the user gesture is spent). We only launch the tab, never inject text there.
   const onCopyToService = useCallback(
     (url: string) => {
-      if (!result || busy || (manualOnlyRef.current && result.key.length === 0)) {
+      // Only ship to a third-party AI when something was ACTUALLY redacted (key rows exist). With no
+      // redactions, anonymizedText === the untouched original, and sending that would leak raw PII —
+      // exactly the false-negative case the tool exists to prevent.
+      if (!result || busy || result.key.length === 0) {
         return;
       }
-      window.open(url, "_blank", "noopener,noreferrer");
-      void onCopy();
+      setCopyError(false);
+      setPopupBlocked(false);
+      const clipboard = navigator.clipboard;
+      // No clipboard API (insecure origin / embedded webview): fail loudly and do NOT open the AI tab
+      // with nothing (or stale content) on the clipboard.
+      if (!clipboard?.writeText) {
+        setCopyError(true);
+        return;
+      }
+      const payload = t("result.promptPrefix") + result.anonymizedText;
+      let copyPromise: Promise<void>;
+      try {
+        copyPromise = clipboard.writeText(payload);
+      } catch {
+        setCopyError(true);
+        return;
+      }
+      // A blocked popup returns null; the copy still ran, so guide the user to paste manually instead of
+      // silently signalling success with no tab.
+      const opened = window.open(url, "_blank", "noopener,noreferrer");
+      if (!opened) {
+        setPopupBlocked(true);
+      }
+      openRestore();
+      copyPromise
+        .then(() => {
+          setCopied(true);
+          window.setTimeout(() => setCopied(false), COPIED_RESET_MS);
+          setShowCopyToast(true);
+          window.setTimeout(() => setShowCopyToast(false), COPY_TOAST_MS);
+        })
+        .catch(() => setCopyError(true));
     },
-    [result, busy, onCopy],
+    [result, busy, t, openRestore],
   );
 
   // Prefer an uploaded key (restore in a later/fresh session) over the in-memory session key.
@@ -1851,9 +1891,9 @@ export function App() {
             <div className="relative">
               {result.anonymizedText.trim().length > 0 && (
                 <div className="absolute end-3 top-3 z-10 flex gap-1.5">
-                  {/* Safety (manual mode, zero redactions): the copy would hand back untouched content, so
-                      hide it until the user has hidden at least one value. */}
-                  {!(manualOnly && result.key.length === 0) && (
+                  {/* Safety (zero redactions in either mode): the copy would hand back untouched content,
+                      so hide it until at least one value is redacted. */}
+                  {result.key.length > 0 && (
                     <button
                       type="button"
                       onClick={onCopy}
@@ -1939,7 +1979,7 @@ export function App() {
             {/* Send-to-AI: branded "copy and open" launchers + a neutral copy-only option (for users on a
                 local/private AI like Lawsy or Nevo). Each branded button copies the redacted text AND opens
                 the service in a new tab; it never injects text there. Same guard as the corner copy icon. */}
-            {result.anonymizedText.trim().length > 0 && !(manualOnly && result.key.length === 0) && (
+            {result.anonymizedText.trim().length > 0 && result.key.length > 0 && (
               <div className="mt-4 rounded-2xl border border-hairline bg-surface p-4">
                 <div className="text-[13px] font-medium text-ink">{t("result.sendHeading")}</div>
                 <p className="mt-1 text-xs leading-relaxed text-zinc-600">{t("result.sendHint")}</p>
@@ -1971,19 +2011,10 @@ export function App() {
                     <ClaudeLogo className="shrink-0" />
                     {t("result.copyOpenClaude")}
                   </button>
-                  <button
-                    type="button"
-                    onClick={onCopy}
-                    disabled={busy}
-                    className="inline-flex min-h-[44px] items-center gap-2 rounded-full px-4 text-[14px] font-medium text-zinc-600 transition hover:text-ink active:scale-[0.98] disabled:opacity-40"
-                  >
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                      <rect x="9" y="9" width="11" height="11" rx="2" stroke="currentColor" strokeWidth="1.8" />
-                      <path d="M5 15V5a2 2 0 0 1 2-2h8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-                    </svg>
-                    {t("result.copyPlain")}
-                  </button>
                 </div>
+                {popupBlocked && (
+                  <p className="mt-2 text-xs text-amber-700" role="alert">{t("result.popupBlocked")}</p>
+                )}
               </div>
             )}
             {copyError && <p className="mt-2 px-2 text-xs text-amber-700" role="alert">{t("result.copyFailed")}</p>}
@@ -2009,7 +2040,7 @@ export function App() {
             {/* The AI-instruction disclosure pops as a short toast on copy (see onCopy) instead of sitting
                 here as permanent clutter. Restore auto-opens on copy via openRestore. The restore-key
                 download is intentionally NOT here: same-session restore needs no key, so the key lives in a
-                collapsed, opt-in card AFTER the restore flow (renderKeyDownload) to keep this flow clean. */}
+                collapsed, opt-in card AFTER the restore section (see below) to keep this flow clean. */}
           </section>
         )}
 
