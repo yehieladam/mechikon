@@ -17,6 +17,9 @@ export const he = {
     subtitleSmall: "אנונימיזציה מוכוונת-GDPR וחוק הגנת הפרטיות, שמסירה נתונים אישיים לפני שמעבירים ל-AI.",
     cta: "להתחיל, בלי הרשמה",
     taglineStrong: "הסתרת מידע רגיש בחינם",
+    watchDemo: "צפו איך זה עובד",
+    demoTitle: "ככה מחיקון עובד",
+    demoClose: "סגירה",
   },
   flow: {
     heading: "איך זה עובד",

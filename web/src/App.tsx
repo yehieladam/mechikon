@@ -265,6 +265,7 @@ export function App() {
   const [input, setInput] = useState("");
   // Drag-and-drop onto the input card (F2). Dropped files go through the existing onFile path.
   const [dragging, setDragging] = useState(false);
+  const [demoOpen, setDemoOpen] = useState(false);
   const [source, setSource] = useState<Source | null>(null);
   const [status, setStatus] = useState<null | "working" | "reading">(null);
   const [result, setResult] = useState<AnonymizeResult | null>(null);
@@ -641,6 +642,15 @@ export function App() {
 
   // When the model finishes loading, re-run whatever is on screen so names get redacted too.
   const previousNerStatus = useRef(ner.status);
+  useEffect(() => {
+    if (!demoOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setDemoOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [demoOpen]);
+
   useEffect(() => {
     const wasReady = previousNerStatus.current === "ready";
     previousNerStatus.current = ner.status;
@@ -1140,6 +1150,38 @@ export function App() {
 
   return (
     <div dir="rtl" className="min-h-screen overflow-x-hidden bg-white text-ink">
+      {demoOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={t("hero.demoTitle")}
+          onClick={() => setDemoOpen(false)}
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4 animate-[fadeIn_0.2s_ease]"
+        >
+          <div
+            onClick={(event) => event.stopPropagation()}
+            className="relative w-full max-w-3xl overflow-hidden rounded-3xl bg-black shadow-card"
+          >
+            <button
+              type="button"
+              onClick={() => setDemoOpen(false)}
+              aria-label={t("hero.demoClose")}
+              className="absolute end-3 top-3 z-10 flex h-11 w-11 items-center justify-center rounded-full bg-white/90 text-ink shadow-card transition hover:bg-white"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                <path d="M18 6 6 18M6 6l12 12" strokeLinecap="round" />
+              </svg>
+            </button>
+            <video
+              src="/demo.mp4"
+              controls
+              autoPlay
+              playsInline
+              className="aspect-video w-full bg-black"
+            />
+          </div>
+        </div>
+      )}
       {showCopyToast && (
         <div
           role="status"
@@ -1228,6 +1270,22 @@ export function App() {
             <span className="marker-highlight text-zinc-700">{t("hero.subtitleSmall")}</span>
           </p>
           <p className="mt-3 text-[15px] font-medium text-ink">{t("hero.taglineStrong")}</p>
+          <button
+            type="button"
+            onClick={() => setDemoOpen(true)}
+            className="mt-6 inline-flex min-h-[44px] items-center gap-2 rounded-full border border-hairline bg-white px-5 text-sm font-medium text-ink shadow-card transition hover:bg-surface"
+          >
+            <svg
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="currentColor"
+              aria-hidden="true"
+            >
+              <path d="M8 5v14l11-7z" />
+            </svg>
+            {t("hero.watchDemo")}
+          </button>
         </section>
 
         <section className="mt-12">
