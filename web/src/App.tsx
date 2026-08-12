@@ -15,6 +15,7 @@ import {
 } from "@engine/keyCrypto";
 import { getEngine } from "./worker/engineClient";
 import { CategoryLegend } from "./CategoryLegend";
+import { OpenAiLogo, GeminiLogo, ClaudeLogo } from "./components/AiLogos";
 import {
   FAMILY_PILL_CLASS,
   familyOf,
@@ -154,6 +155,47 @@ const WORD_RUN = /[A-Za-z֐-׿]+(?:['’׳״][A-Za-z֐-׿]+)*|\d+(?:[.\-/]\d+)*/
 function autoPillClass(type: EntityType | undefined): string {
   const family = type ? familyOf(type) : null;
   return family ? FAMILY_PILL_CLASS[family] : "bg-ink/[0.06] text-ink";
+}
+
+/** A "?" affordance that toggles a small popover. Click stops propagation so it never toggles a parent
+ *  <details>/<summary>; closes on blur or Escape. The trigger is a 44px touch target. */
+function InfoTip({ label, text }: { readonly label: string; readonly text: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <span className="relative inline-flex">
+      <button
+        type="button"
+        aria-label={label}
+        aria-expanded={open}
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          setOpen((v) => !v);
+        }}
+        onBlur={() => setOpen(false)}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            setOpen(false);
+          }
+        }}
+        className="inline-flex h-11 w-11 items-center justify-center rounded-full text-zinc-500 transition hover:text-ink"
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.7" />
+          <path d="M12 11v5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+          <circle cx="12" cy="7.5" r="1" fill="currentColor" />
+        </svg>
+      </button>
+      {open && (
+        <span
+          role="tooltip"
+          className="absolute bottom-full end-0 z-20 mb-2 w-64 rounded-xl border border-hairline bg-white p-3 text-start text-xs font-normal leading-relaxed text-zinc-700 shadow-card"
+        >
+          {text}
+        </span>
+      )}
+    </span>
+  );
 }
 
 function renderInteractive(
@@ -1043,6 +1085,20 @@ export function App() {
     }
   }, [result, busy, t, openRestore]);
 
+  // "Copy and open in <service>": open the AI service tab FIRST (synchronously, inside the click gesture)
+  // so the popup blocker does not swallow it after the async clipboard write in onCopy. We only launch
+  // the tab, never inject text — the user pastes there (no third-party API, no data leaves the browser).
+  const onCopyToService = useCallback(
+    (url: string) => {
+      if (!result || busy || (manualOnlyRef.current && result.key.length === 0)) {
+        return;
+      }
+      window.open(url, "_blank", "noopener,noreferrer");
+      void onCopy();
+    },
+    [result, busy, onCopy],
+  );
+
   // Prefer an uploaded key (restore in a later/fresh session) over the in-memory session key.
   const activeKey = selectActiveKey(uploadedKey, result?.key ?? null);
 
@@ -1879,6 +1935,57 @@ export function App() {
                 )}
               </div>
             </div>
+
+            {/* Send-to-AI: branded "copy and open" launchers + a neutral copy-only option (for users on a
+                local/private AI like Lawsy or Nevo). Each branded button copies the redacted text AND opens
+                the service in a new tab; it never injects text there. Same guard as the corner copy icon. */}
+            {result.anonymizedText.trim().length > 0 && !(manualOnly && result.key.length === 0) && (
+              <div className="mt-4 rounded-2xl border border-hairline bg-surface p-4">
+                <div className="text-[13px] font-medium text-ink">{t("result.sendHeading")}</div>
+                <p className="mt-1 text-xs leading-relaxed text-zinc-600">{t("result.sendHint")}</p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => onCopyToService("https://chatgpt.com/")}
+                    disabled={busy}
+                    className="inline-flex min-h-[44px] items-center gap-2 rounded-full border border-hairline bg-white px-4 text-[14px] font-medium text-ink transition hover:border-zinc-300 hover:bg-zinc-50 active:scale-[0.98] disabled:opacity-40"
+                  >
+                    <OpenAiLogo className="shrink-0" />
+                    {t("result.copyOpenGpt")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onCopyToService("https://gemini.google.com/app")}
+                    disabled={busy}
+                    className="inline-flex min-h-[44px] items-center gap-2 rounded-full border border-hairline bg-white px-4 text-[14px] font-medium text-ink transition hover:border-zinc-300 hover:bg-zinc-50 active:scale-[0.98] disabled:opacity-40"
+                  >
+                    <GeminiLogo className="shrink-0" />
+                    {t("result.copyOpenGemini")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onCopyToService("https://claude.ai/new")}
+                    disabled={busy}
+                    className="inline-flex min-h-[44px] items-center gap-2 rounded-full border border-hairline bg-white px-4 text-[14px] font-medium text-ink transition hover:border-zinc-300 hover:bg-zinc-50 active:scale-[0.98] disabled:opacity-40"
+                  >
+                    <ClaudeLogo className="shrink-0" />
+                    {t("result.copyOpenClaude")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onCopy}
+                    disabled={busy}
+                    className="inline-flex min-h-[44px] items-center gap-2 rounded-full px-4 text-[14px] font-medium text-zinc-600 transition hover:text-ink active:scale-[0.98] disabled:opacity-40"
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                      <rect x="9" y="9" width="11" height="11" rx="2" stroke="currentColor" strokeWidth="1.8" />
+                      <path d="M5 15V5a2 2 0 0 1 2-2h8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                    </svg>
+                    {t("result.copyPlain")}
+                  </button>
+                </div>
+              </div>
+            )}
             {copyError && <p className="mt-2 px-2 text-xs text-amber-700" role="alert">{t("result.copyFailed")}</p>}
             {manualOnly ? (
               <p className="mt-3 rounded-xl bg-amber-50/60 px-3 py-2 text-xs leading-relaxed text-zinc-600">
@@ -1900,167 +2007,9 @@ export function App() {
             )}
 
             {/* The AI-instruction disclosure pops as a short toast on copy (see onCopy) instead of sitting
-                here as permanent clutter. Restore auto-opens on copy via openRestore. */}
-
-            {result.key.length > 0 && (
-              <div
-                className={`mt-4 rounded-2xl border border-hairline bg-surface p-4 ${
-                  keyDownloaded ? "" : "border-s-[3px] border-s-amber-300"
-                }`}
-              >
-                {keyDownloaded ? (
-                  // State B: calm confirmation. The key is saved; no more warnings.
-                  <div className="flex items-start gap-3">
-                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600">
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                        <path
-                          d="M5 12l4.5 4.5L19 7"
-                          stroke="currentColor"
-                          strokeWidth="2"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        />
-                      </svg>
-                    </div>
-                    <div className="min-w-0">
-                      <div className="text-[13px] font-medium text-ink">{t("key.title")}</div>
-                      <p className="mt-1 text-xs leading-relaxed text-ink">{t("key.downloaded")}</p>
-                    </div>
-                  </div>
-                ) : (
-                  // State A: guidance. One amber-weight irreversibility sentence, the rest zinc. When the
-                  // key CHANGED after a prior download (G4), show only the quiet delta, not the full wall.
-                  <div className="flex items-start gap-3">
-                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-700">
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                        <circle cx="8" cy="8" r="4" stroke="currentColor" strokeWidth="1.7" />
-                        <path
-                          d="M11 11l8 8m-3 0 3-3"
-                          stroke="currentColor"
-                          strokeWidth="1.7"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        />
-                      </svg>
-                    </div>
-                    <div className="min-w-0">
-                      <div className="text-[13px] font-medium text-ink">{t("key.createTitle")}</div>
-                      {keyEverDownloaded ? (
-                        <p className="mt-1 text-xs font-medium leading-relaxed text-amber-800">
-                          {t("key.changed")}
-                        </p>
-                      ) : (
-                        <>
-                          <p className="mt-1 text-xs leading-relaxed text-zinc-600">
-                            {t("key.meaningless")}
-                          </p>
-                          <p className="mt-1 text-xs leading-relaxed text-zinc-600">
-                            {t("key.sessionActive")}
-                          </p>
-                          <p className="mt-1 text-xs font-medium leading-relaxed text-amber-800">
-                            {t("key.warning")}
-                          </p>
-                        </>
-                      )}
-                      {ner.status === "loading" && (
-                        <p className="mt-1 text-xs leading-relaxed text-zinc-600">{t("key.notFinal")}</p>
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                <label className="mt-3 flex min-h-[44px] cursor-pointer items-center gap-2 py-2 text-[13px] text-zinc-700">
-                  <input
-                    type="checkbox"
-                    checked={encryptKey}
-                    onChange={(event) => setEncryptKey(event.target.checked)}
-                    className="h-4 w-4 accent-ink"
-                  />
-                  {t("key.encrypt")}
-                </label>
-                {encryptKey && (
-                  <div className="relative mt-2">
-                    <input
-                      ref={passphraseRef}
-                      type={showPass ? "text" : "password"}
-                      value={keyPassphrase}
-                      onChange={(event) => {
-                        setKeyPassphrase(event.target.value);
-                        setPassphraseMissing(false);
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") {
-                          event.preventDefault();
-                          void onDownloadKey();
-                        }
-                      }}
-                      placeholder={t("key.passphrase")}
-                      aria-label={t("key.passphrase")}
-                      className="min-h-[44px] w-full rounded-xl border border-hairline bg-white px-3 py-2 pe-12 text-[16px] outline-none focus-visible:ring-2 focus-visible:ring-ink/20 placeholder:text-zinc-500"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowPass((v) => !v)}
-                      aria-label={t(showPass ? "key.hidePass" : "key.showPass")}
-                      className="absolute inset-y-0 end-0 inline-flex min-h-[44px] min-w-[44px] items-center justify-center text-zinc-500 transition hover:text-ink"
-                    >
-                      {showPass ? (
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                          <path
-                            d="M3 3l18 18M10.6 10.6a3 3 0 0 0 4.2 4.2M9.9 5.2A9.6 9.6 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3.2 4M6.1 6.1A17 17 0 0 0 2 12s3.5 7 10 7a9.6 9.6 0 0 0 3-.5"
-                            stroke="currentColor"
-                            strokeWidth="1.7"
-                            strokeLinecap="round"
-                          />
-                        </svg>
-                      ) : (
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                          <path
-                            d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"
-                            stroke="currentColor"
-                            strokeWidth="1.7"
-                          />
-                          <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.7" />
-                        </svg>
-                      )}
-                    </button>
-                  </div>
-                )}
-                {passphraseMissing && (
-                  <p className="mt-1 text-xs text-amber-700">{t("key.passphraseHint")}</p>
-                )}
-                <button
-                  type="button"
-                  onClick={() => void onDownloadKey()}
-                  className="mt-3 inline-flex min-h-[44px] items-center gap-1.5 rounded-full bg-ink px-5 text-[14px] font-medium text-white transition hover:opacity-90 active:scale-[0.98]"
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                    <path
-                      d="M12 4v11m0 0l-4-4m4 4l4-4M5 20h14"
-                      stroke="currentColor"
-                      strokeWidth="1.9"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
-                  {t(keyDownloaded ? "key.downloadAgain" : "key.download")}
-                </button>
-                {encryptKey && keyPassphrase.length === 0 && (
-                  <div className="mt-2">
-                    <button
-                      type="button"
-                      onClick={() => void onDownloadKey(true)}
-                      className="text-xs text-zinc-600 underline decoration-zinc-300 underline-offset-2 transition hover:text-ink"
-                    >
-                      {t("key.downloadPlain")}
-                    </button>
-                    <p className="mt-1 text-[11px] leading-relaxed text-zinc-600">
-                      {t("key.plainWarning")}
-                    </p>
-                  </div>
-                )}
-              </div>
-            )}
+                here as permanent clutter. Restore auto-opens on copy via openRestore. The restore-key
+                download is intentionally NOT here: same-session restore needs no key, so the key lives in a
+                collapsed, opt-in card AFTER the restore flow (renderKeyDownload) to keep this flow clean. */}
           </section>
         )}
 
@@ -2387,6 +2336,197 @@ export function App() {
             </div>
           </details>
         </section>
+
+        {/* Restore key — DEMOTED. Same-session restore already works from the in-memory key (no download
+            needed), so the key is a collapsed, opt-in card here (after the restore flow), not a step in the
+            main flow. The always-visible reassurance reframes "why is there a key" as a privacy guarantee. */}
+        {result && result.key.length > 0 && (
+          <section className="mt-4">
+            {/* Always-visible privacy reassurance — reframes "why is there a key" as a guarantee. Kept
+                OUTSIDE the <summary> so the InfoTip button is never an interactive control nested in the
+                summary (axe nested-interactive). */}
+            <div className="mb-2 flex items-center gap-1 px-1 text-xs text-zinc-600">
+              {t("key.reassurance")}
+              <InfoTip label={t("key.reassuranceMore")} text={t("key.reassuranceFull")} />
+            </div>
+            <details className="group rounded-2xl border border-hairline bg-white transition hover:border-zinc-300">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 p-5 text-ink">
+                <span className="flex min-w-0 items-center gap-3">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-zinc-100 text-zinc-600">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                      <path
+                        d="M12 4v11m0 0l-4-4m4 4l4-4M5 20h14"
+                        stroke="currentColor"
+                        strokeWidth="1.9"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-sm font-medium">{t("key.downloadSecondary")}</span>
+                  </span>
+                </span>
+                <span className="shrink-0 text-zinc-500 transition group-open:rotate-180" aria-hidden="true">
+                  ⌄
+                </span>
+              </summary>
+              <div className="px-5 pb-5">
+                {keyDownloaded ? (
+                  // State B: calm confirmation. The key is saved; no more warnings.
+                  <div className="flex items-start gap-3">
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600">
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                        <path
+                          d="M5 12l4.5 4.5L19 7"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-[13px] font-medium text-ink">{t("key.title")}</div>
+                      <p className="mt-1 text-xs leading-relaxed text-ink">{t("key.downloaded")}</p>
+                    </div>
+                  </div>
+                ) : (
+                  // State A: guidance. One amber-weight irreversibility sentence, the rest zinc. When the
+                  // key CHANGED after a prior download (G4), show only the quiet delta, not the full wall.
+                  <div className="flex items-start gap-3">
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-700">
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                        <circle cx="8" cy="8" r="4" stroke="currentColor" strokeWidth="1.7" />
+                        <path
+                          d="M11 11l8 8m-3 0 3-3"
+                          stroke="currentColor"
+                          strokeWidth="1.7"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-[13px] font-medium text-ink">{t("key.createTitle")}</div>
+                      {keyEverDownloaded ? (
+                        <p className="mt-1 text-xs font-medium leading-relaxed text-amber-800">
+                          {t("key.changed")}
+                        </p>
+                      ) : (
+                        <>
+                          <p className="mt-1 text-xs leading-relaxed text-zinc-600">
+                            {t("key.meaningless")}
+                          </p>
+                          <p className="mt-1 text-xs leading-relaxed text-zinc-600">
+                            {t("key.sessionActive")}
+                          </p>
+                          <p className="mt-1 text-xs font-medium leading-relaxed text-amber-800">
+                            {t("key.warning")}
+                          </p>
+                        </>
+                      )}
+                      {ner.status === "loading" && (
+                        <p className="mt-1 text-xs leading-relaxed text-zinc-600">{t("key.notFinal")}</p>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                <label className="mt-3 flex min-h-[44px] cursor-pointer items-center gap-2 py-2 text-[13px] text-zinc-700">
+                  <input
+                    type="checkbox"
+                    checked={encryptKey}
+                    onChange={(event) => setEncryptKey(event.target.checked)}
+                    className="h-4 w-4 accent-ink"
+                  />
+                  {t("key.encrypt")}
+                </label>
+                {encryptKey && (
+                  <div className="relative mt-2">
+                    <input
+                      ref={passphraseRef}
+                      type={showPass ? "text" : "password"}
+                      value={keyPassphrase}
+                      onChange={(event) => {
+                        setKeyPassphrase(event.target.value);
+                        setPassphraseMissing(false);
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          void onDownloadKey();
+                        }
+                      }}
+                      placeholder={t("key.passphrase")}
+                      aria-label={t("key.passphrase")}
+                      className="min-h-[44px] w-full rounded-xl border border-hairline bg-white px-3 py-2 pe-12 text-[16px] outline-none focus-visible:ring-2 focus-visible:ring-ink/20 placeholder:text-zinc-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPass((v) => !v)}
+                      aria-label={t(showPass ? "key.hidePass" : "key.showPass")}
+                      className="absolute inset-y-0 end-0 inline-flex min-h-[44px] min-w-[44px] items-center justify-center text-zinc-500 transition hover:text-ink"
+                    >
+                      {showPass ? (
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                          <path
+                            d="M3 3l18 18M10.6 10.6a3 3 0 0 0 4.2 4.2M9.9 5.2A9.6 9.6 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3.2 4M6.1 6.1A17 17 0 0 0 2 12s3.5 7 10 7a9.6 9.6 0 0 0 3-.5"
+                            stroke="currentColor"
+                            strokeWidth="1.7"
+                            strokeLinecap="round"
+                          />
+                        </svg>
+                      ) : (
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                          <path
+                            d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"
+                            stroke="currentColor"
+                            strokeWidth="1.7"
+                          />
+                          <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.7" />
+                        </svg>
+                      )}
+                    </button>
+                  </div>
+                )}
+                {passphraseMissing && (
+                  <p className="mt-1 text-xs text-amber-700">{t("key.passphraseHint")}</p>
+                )}
+                <button
+                  type="button"
+                  onClick={() => void onDownloadKey()}
+                  className="mt-3 inline-flex min-h-[44px] items-center gap-1.5 rounded-full bg-ink px-5 text-[14px] font-medium text-white transition hover:opacity-90 active:scale-[0.98]"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path
+                      d="M12 4v11m0 0l-4-4m4 4l4-4M5 20h14"
+                      stroke="currentColor"
+                      strokeWidth="1.9"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                  {t(keyDownloaded ? "key.downloadAgain" : "key.download")}
+                </button>
+                {encryptKey && keyPassphrase.length === 0 && (
+                  <div className="mt-2">
+                    <button
+                      type="button"
+                      onClick={() => void onDownloadKey(true)}
+                      className="text-xs text-zinc-600 underline decoration-zinc-300 underline-offset-2 transition hover:text-ink"
+                    >
+                      {t("key.downloadPlain")}
+                    </button>
+                    <p className="mt-1 text-[11px] leading-relaxed text-zinc-600">
+                      {t("key.plainWarning")}
+                    </p>
+                  </div>
+                )}
+              </div>
+            </details>
+          </section>
+        )}
 
         <section id="faq" className="mx-auto mt-24 max-w-2xl scroll-mt-6 px-1">
           <h2 className="text-center text-lg font-semibold tracking-tight">{t("faq.heading")}</h2>
