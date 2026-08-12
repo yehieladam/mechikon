@@ -231,6 +231,48 @@ test("copy prepends an AI instruction so the tokens survive the round-trip", asy
   expect(clip.indexOf("---")).toBeLessThan(clip.indexOf("[PHONE_1]")); // instruction precedes the text
 });
 
+test("send-to-AI: a branded button copies the REDACTED text and opens the service tab", async ({
+  page,
+}) => {
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  // Stub window.open so the test never navigates to the real AI service (no external network) and we can
+  // assert exactly which URL was launched.
+  await page.addInitScript(() => {
+    (window as unknown as { __opened: string[] }).__opened = [];
+    window.open = ((url?: string | URL) => {
+      (window as unknown as { __opened: string[] }).__opened.push(String(url));
+      return null;
+    }) as typeof window.open;
+  });
+  await page.goto("/");
+  await page.fill("textarea", `לקוח בטלפון ${PHONE}`);
+  await page.getByRole("button", { name: "השחרת המסמך" }).click();
+  await expect(page.getByRole("button", { name: "[PHONE_1]", exact: true })).toBeVisible({
+    timeout: 15_000,
+  });
+
+  await page.getByRole("button", { name: "העתק ופתח ב-ChatGPT" }).click();
+  // The service tab was launched at the right URL.
+  const opened = await page.evaluate(() => (window as unknown as { __opened: string[] }).__opened);
+  expect(opened).toContain("https://chatgpt.com/");
+  // The clipboard carries the REDACTED text (tokens), never the raw value.
+  const clip = await page.evaluate(() => navigator.clipboard.readText());
+  expect(clip).toContain("[PHONE_1]");
+  expect(clip).not.toContain(PHONE);
+});
+
+test("send-to-AI: buttons are hidden until something is actually redacted", async ({ page }) => {
+  await page.goto("/");
+  // Manual mode with no structured PII → nothing redacted → the send-to-AI block must not render, so the
+  // untouched original can never be shipped to a third-party AI.
+  await page.fill("textarea", "לקוח דנה כהן בפגישה");
+  await page.getByRole("button", { name: "השחרת המסמך" }).click();
+  await expect(page.getByText("שליחה ל-AI")).toHaveCount(0);
+  // Redact one word manually → a key row now exists → the buttons appear.
+  await page.getByRole("button", { name: "דנה", exact: true }).first().click();
+  await expect(page.getByText("שליחה ל-AI")).toBeVisible();
+});
+
 test("@model docx + xlsx: redact in place and download a file without the originals", async ({
   page,
 }) => {
