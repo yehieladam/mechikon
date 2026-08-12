@@ -1,4 +1,4 @@
-# anon-extension — client-side Hebrew PII anonymizer
+# mechikon — client-side Hebrew PII anonymizer
 
 A **fully client-side** Hebrew PII anonymizer: detection runs in the user's browser, nothing
 leaves the device, no server, no account. Ships as a **Chrome extension** (popup) and, later, a

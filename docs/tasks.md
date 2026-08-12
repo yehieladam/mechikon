@@ -1,4 +1,4 @@
-# Task board — anon-extension
+# Task board — mechikon
 
 > **How to use:** before starting a task, set `Owner:` to your handle and push/commit that change
 > (claim-first rule — see `CONTRIBUTING.md`). One branch per task: `feat/<id>-short-name`.
