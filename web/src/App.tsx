@@ -157,6 +157,30 @@ function autoPillClass(type: EntityType | undefined): string {
   return family ? FAMILY_PILL_CLASS[family] : "bg-ink/[0.06] text-ink";
 }
 
+/**
+ * Copy text to the clipboard SYNCHRONOUSLY via a hidden textarea + execCommand. Used by the
+ * "copy and open in <service>" flow: window.open moves focus to the new tab, and the async Clipboard
+ * API can reject a write once the origin tab is blurred (Firefox/Safari), so a synchronous copy that
+ * completes inside the click gesture is the reliable cross-browser path. Returns true on success.
+ */
+function copyTextSync(text: string): boolean {
+  try {
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.top = "-9999px";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    textarea.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(textarea);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
 /** A "?" affordance that toggles a small popover. Click stops propagation so it never toggles a parent
  *  <details>/<summary>; closes on blur or Escape. The trigger is a 44px touch target. */
 function InfoTip({ label, text }: { readonly label: string; readonly text: string }) {
@@ -1066,11 +1090,19 @@ export function App() {
     });
   }, []);
 
+  // Shared copy-success feedback: the "copied" tick plus the transient AI-instruction toast. Used by
+  // both copy paths so the choreography never drifts between them.
+  const announceCopied = useCallback(() => {
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), COPIED_RESET_MS);
+    setShowCopyToast(true);
+    window.setTimeout(() => setShowCopyToast(false), COPY_TOAST_MS);
+  }, []);
+
   const onCopy = useCallback(async () => {
-    // Defense-in-depth: never copy while busy, and never in manual mode with zero redactions (the text
-    // would be the untouched original). The JSX also hides the button + disables it while busy.
     // Only copy when something was actually redacted; with no key rows anonymizedText === the untouched
-    // original, which must never be handed off for an AI round-trip.
+    // original, which must never be handed off for an AI round-trip. The JSX also hides + disables the
+    // button while busy.
     if (!result || busy || result.key.length === 0) {
       return;
     }
@@ -1080,21 +1112,16 @@ export function App() {
     openRestore();
     try {
       await navigator.clipboard.writeText(t("result.promptPrefix") + result.anonymizedText);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), COPIED_RESET_MS);
-      // The AI-instruction disclosure pops as a short toast instead of sitting as permanent clutter.
-      setShowCopyToast(true);
-      window.setTimeout(() => setShowCopyToast(false), COPY_TOAST_MS);
+      announceCopied();
     } catch {
       setCopyError(true);
     }
-  }, [result, busy, t, openRestore]);
+  }, [result, busy, t, openRestore, announceCopied]);
 
-  // "Copy and open in <service>": copy the redacted text to the clipboard FIRST — while this tab still
-  // has focus — then open the service. window.open shifts focus to the new tab, and a clipboard write
-  // from a blurred tab is rejected ("Document is not focused"); starting the write before the open is why
-  // the text actually lands on the clipboard. We do NOT await before window.open, or the popup blocker
-  // would swallow the tab (the user gesture is spent). We only launch the tab, never inject text there.
+  // "Copy and open in <service>": copy the redacted text SYNCHRONOUSLY (execCommand) BEFORE opening the
+  // service tab. window.open shifts focus to the new tab, and the async Clipboard API can reject a write
+  // from a blurred tab (Firefox/Safari), so a synchronous copy that finishes inside the click gesture is
+  // the reliable cross-browser path. We only launch the tab, never inject text there.
   const onCopyToService = useCallback(
     (url: string) => {
       // Only ship to a third-party AI when something was ACTUALLY redacted (key rows exist). With no
@@ -1105,21 +1132,8 @@ export function App() {
       }
       setCopyError(false);
       setPopupBlocked(false);
-      const clipboard = navigator.clipboard;
-      // No clipboard API (insecure origin / embedded webview): fail loudly and do NOT open the AI tab
-      // with nothing (or stale content) on the clipboard.
-      if (!clipboard?.writeText) {
-        setCopyError(true);
-        return;
-      }
       const payload = t("result.promptPrefix") + result.anonymizedText;
-      let copyPromise: Promise<void>;
-      try {
-        copyPromise = clipboard.writeText(payload);
-      } catch {
-        setCopyError(true);
-        return;
-      }
+      const copiedSync = copyTextSync(payload);
       // A blocked popup returns null; the copy still ran, so guide the user to paste manually instead of
       // silently signalling success with no tab.
       const opened = window.open(url, "_blank", "noopener,noreferrer");
@@ -1127,16 +1141,20 @@ export function App() {
         setPopupBlocked(true);
       }
       openRestore();
-      copyPromise
-        .then(() => {
-          setCopied(true);
-          window.setTimeout(() => setCopied(false), COPIED_RESET_MS);
-          setShowCopyToast(true);
-          window.setTimeout(() => setShowCopyToast(false), COPY_TOAST_MS);
-        })
-        .catch(() => setCopyError(true));
+      if (copiedSync) {
+        announceCopied();
+        return;
+      }
+      // execCommand unavailable (locked-down browser): best-effort async fallback so the copy still has a
+      // chance to land, even though focus may already be lost.
+      const clipboard = navigator.clipboard;
+      if (clipboard?.writeText) {
+        clipboard.writeText(payload).then(announceCopied).catch(() => setCopyError(true));
+      } else {
+        setCopyError(true);
+      }
     },
-    [result, busy, t, openRestore],
+    [result, busy, t, openRestore, announceCopied],
   );
 
   // Prefer an uploaded key (restore in a later/fresh session) over the in-memory session key.
