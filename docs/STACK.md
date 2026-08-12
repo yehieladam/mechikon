@@ -1,6 +1,6 @@
 # Stack — exact versions & rationale
 
-The authoritative stack for `anon-extension`. Pin these; do not bump without re-verifying (especially
+The authoritative stack for `mechikon`. Pin these; do not bump without re-verifying (especially
 transformers.js / onnxruntime — see `browser-poc/PHASE0_FINDINGS.md`).
 
 ## Runtime / tooling

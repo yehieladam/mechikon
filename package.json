@@ -1,5 +1,5 @@
 {
-  "name": "anon-extension",
+  "name": "mechikon",
   "version": "0.1.0",
   "private": true,
   "description": "Fully client-side Hebrew PII anonymizer - Chrome extension (MV3) + reusable framework-free engine",

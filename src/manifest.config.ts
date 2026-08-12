@@ -10,7 +10,7 @@ import { defineManifest } from "@crxjs/vite-plugin";
 // - Zero permissions: a paste/upload popup needs none — keep it that way (Store trust).
 export default defineManifest({
   manifest_version: 3,
-  name: "Anon - Hebrew PII Anonymizer (dev build)",
+  name: "מחיקון — Hebrew PII Anonymizer (dev build)",
   version: "0.1.0",
   description:
     "Anonymize Israeli PII in Hebrew text, fully in your browser. Nothing leaves your device.",
