@@ -8,8 +8,8 @@
  *
  * Deterministic only for now (instant, no model). NER (names/orgs) arrives later via an offscreen doc.
  */
-import type { Span } from "@engine/types";
 import { RedactSession } from "./session";
+import { requestNer } from "../shared/ner";
 import {
   closestEditable,
   currentSelection,
@@ -198,7 +198,17 @@ function setChipDetected(count: number) {
   ui.chip.style.display = "flex";
 }
 
-/** Everything redacted: green dot, "protected", only שחזר (nothing left to hide). */
+/** Deterministic values masked, but names/orgs still pending (model loading or NER pass not done):
+ *  ORANGE dot + "partly protected" — never a full-green "safe" claim while a name may be exposed. */
+function setChipPending() {
+  ui.dot.classList.remove("green");
+  ui.chipLabel.textContent = "מוגן חלקית · שמות בהמתנה";
+  ui.chipBtn.style.display = "none";
+  ui.restoreBtn.style.display = session.hasKey ? "" : "none";
+  ui.chip.style.display = "flex";
+}
+
+/** Everything redacted (incl. names, model was ready): green dot, only שחזר. */
 function setChipProtected(count: number) {
   ui.dot.classList.add("green");
   ui.chipLabel.textContent = count > 0 ? `מוגן · ${count} הוסתרו` : "מוגן";
@@ -269,76 +279,89 @@ document.addEventListener(
   true,
 );
 
+/** The composer to act on: the focused one, or the last focused one IF it's still in the DOM (SPA
+ *  chat sites detach the editor on send/navigate — never write to a detached node). */
+function activeComposer(): Composer | null {
+  const focused = focusedComposer();
+  if (focused) {
+    lastComposer = focused;
+    return focused;
+  }
+  if (lastComposer && lastComposer.isConnected) {
+    return lastComposer;
+  }
+  lastComposer = null;
+  return null;
+}
+
+/** True after a deterministic pass while NER names/orgs are still not applied (model loading, or the
+ *  NER pass hasn't run yet). Drives the "partly protected" chip so we never falsely claim full safety. */
+let namesPending = false;
+
 function updateChip() {
-  const composer = focusedComposer() ?? lastComposer;
-  if (!composer) {
-    // Keep the chip (with שחזר) available once a key exists, even when the composer isn't focused.
-    if (session.hasKey) {
-      setChipProtected(0);
-    } else {
-      hideChip();
-    }
-    return;
+  const composer = activeComposer();
+  const text = composer ? getText(composer) : "";
+  const distinct = composer
+    ? new Set(session.detect(text).map((s) => text.slice(s.start, s.end)))
+    : new Set<string>();
+  if (distinct.size > 0) {
+    setChipDetected(distinct.size);
+  } else if (namesPending) {
+    setChipPending();
+  } else if (session.hasKey) {
+    setChipProtected(0);
+  } else {
+    hideChip();
   }
-  const text = getText(composer);
-  const distinct = new Set(session.detect(text).map((s) => text.slice(s.start, s.end)));
-  if (distinct.size === 0) {
-    if (session.hasKey) {
-      setChipProtected(0);
-    } else {
-      hideChip();
-    }
-    return;
-  }
-  setChipDetected(distinct.size);
+}
+
+function writeWithInstruction(composer: Composer, redacted: string, addInstruction: boolean) {
+  const withInstruction =
+    addInstruction && !redacted.includes(INSTRUCTION_MARKER) ? redacted + INSTRUCTION : redacted;
+  setWholeText(composer, withInstruction);
 }
 
 // ---- redact-all (the chip) -----------------------------------------------------------
+// Two passes, so we never (a) block on the model, (b) overwrite text typed during the await, or
+// (c) claim full protection before names are actually masked.
 async function redactAll() {
-  const composer = focusedComposer() ?? lastComposer;
+  const composer = activeComposer();
   if (!composer) {
     return;
   }
-  const text = getText(composer);
-  // NER (names/orgs) runs in the offscreen model via the background worker. If the model is still
-  // loading it times out fast and we redact deterministically now; names get caught next time.
-  const nerSpans = await requestNer(text);
-  const { text: redacted, newRows } = session.redact(text, nerSpans);
-  const withInstruction =
-    redacted.includes(INSTRUCTION_MARKER) || newRows.length === 0
-      ? redacted
-      : redacted + INSTRUCTION;
-  setWholeText(composer, withInstruction);
-  setChipProtected(newRows.length);
-  if (newRows.length > 0) {
-    const pending = nerReady ? "" : " · שמות וארגונים יזוהו לאחר שמנוע ה-AI ייטען";
-    showToast(`הוסתרו ${newRows.length} פרטים · נוספה הנחיה ל-AI${pending}`);
-  } else {
-    showToast("לא נמצאו פרטים חדשים להסתרה");
-  }
-}
+  // Pass 1 — deterministic + manual, synchronous: write immediately, no race window.
+  const original = getText(composer);
+  const detPass = session.redact(original, []);
+  writeWithInstruction(composer, detPass.text, detPass.newRows.length > 0);
+  namesPending = true;
+  setChipPending();
+  showToast(
+    detPass.newRows.length > 0
+      ? `הוסתרו ${detPass.newRows.length} פרטים · נוספה הנחיה ל-AI`
+      : "נסרק — ממתין לזיהוי שמות",
+  );
 
-/** Ask the offscreen NER model (via the SW) for name/org/location spans; empty on timeout/not-ready. */
-function requestNer(text: string): Promise<Span[]> {
-  return new Promise((resolve) => {
-    let done = false;
-    const finish = (spans: Span[]) => {
-      if (!done) {
-        done = true;
-        resolve(spans);
-      }
-    };
-    const timer = window.setTimeout(() => finish([]), 8000);
-    try {
-      chrome.runtime.sendMessage({ type: "ner:request", text }, (resp) => {
-        window.clearTimeout(timer);
-        finish(resp?.ok ? (resp.spans as Span[]) : []);
-      });
-    } catch {
-      window.clearTimeout(timer);
-      finish([]);
-    }
-  });
+  // Pass 2 — NER names/orgs. Detect on the pre-redaction text, then re-read the CURRENT composer and
+  // mask the values still present there, so anything typed meanwhile is preserved (and also masked).
+  const nerSpans = await requestNer(original);
+  if (!composer.isConnected) {
+    return; // composer was swapped out (message sent) — don't touch a detached node
+  }
+  const valued = nerSpans.map((span) => ({
+    value: original.slice(span.start, span.end),
+    type: span.type,
+  }));
+  const current = getText(composer);
+  const nerPass = session.redactNerValues(current, valued);
+  if (nerPass.newRows.length > 0) {
+    writeWithInstruction(composer, nerPass.text, true);
+    showToast(`הוסתרו גם ${nerPass.newRows.length} שמות/ארגונים`);
+  }
+  if (nerReady) {
+    namesPending = false;
+    setChipProtected(detPass.newRows.length + nerPass.newRows.length);
+  }
+  // If the model isn't ready yet, stay "partly protected" until the user redacts again once it loads.
 }
 
 // ---- selection popover: manual redact / restore --------------------------------------

@@ -68,6 +68,28 @@ describe("RedactSession", () => {
     expect(session.restore(redacted).text).toBe(text);
   });
 
+  it("never reuses a token index for a different value after the first was edited out (restore stays correct)", () => {
+    const session = new RedactSession();
+    const first = session.redact("טלפון 050-1234567");
+    expect(first.text).toContain("[PHONE_1]");
+    // The user deleted the token, then redacts a DIFFERENT phone in fresh text with no [PHONE_1] present.
+    const second = session.redact("טלפון 052-7654321");
+    expect(second.text).toContain("[PHONE_2]"); // must NOT collide on [PHONE_1]
+    expect(second.text).not.toContain("[PHONE_1]");
+    // Both originals restore correctly — no silent corruption.
+    expect(session.restore(second.text).text).toBe("טלפון 052-7654321");
+    expect(session.restore("[PHONE_1]").text).toBe("050-1234567");
+  });
+
+  it("redactNerValues masks the given values in the current text", () => {
+    const session = new RedactSession();
+    const { text, newRows } = session.redactNerValues("דוד כהן הגיע עם דוד כהן", [
+      { value: "דוד כהן", type: "PERSON" },
+    ]);
+    expect(newRows).toHaveLength(1);
+    expect(text).toBe("[NAME_1] הגיע עם [NAME_1]");
+  });
+
   it("reports no key until something is redacted", () => {
     const session = new RedactSession();
     expect(session.hasKey).toBe(false);

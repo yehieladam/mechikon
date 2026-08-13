@@ -1,8 +1,9 @@
 import { useCallback, useRef, useState } from "react";
-import type { KeyRow, Span } from "@engine/types";
+import type { KeyRow } from "@engine/types";
 import { anonymizeWith } from "@engine/pipeline";
 import { toKeyFile } from "@engine/key";
 import { extractText, ACCEPTED } from "./extract";
+import { requestNer } from "../shared/ner";
 
 type Status = "idle" | "working" | "done" | "error";
 
@@ -12,44 +13,31 @@ interface Result {
   readonly baseName: string;
 }
 
-/** Ask the offscreen NER model (via the SW) for name/org/location spans; empty on timeout. */
-function requestNer(text: string): Promise<Span[]> {
-  return new Promise((resolve) => {
-    let done = false;
-    const finish = (spans: Span[]) => {
-      if (!done) {
-        done = true;
-        resolve(spans);
-      }
-    };
-    const timer = setTimeout(() => finish([]), 12000);
-    try {
-      chrome.runtime.sendMessage({ type: "ner:request", text }, (resp) => {
-        clearTimeout(timer);
-        finish(resp?.ok ? (resp.spans as Span[]) : []);
-      });
-    } catch {
-      clearTimeout(timer);
-      finish([]);
-    }
-  });
-}
-
 function download(name: string, text: string, type: string): void {
   const url = URL.createObjectURL(new Blob([text], { type }));
   const anchor = document.createElement("a");
   anchor.href = url;
   anchor.download = name;
+  anchor.style.display = "none";
+  document.body.appendChild(anchor);
   anchor.click();
-  URL.revokeObjectURL(url);
+  // Defer revoke + removal: revoking on the same tick can abort the download before the browser
+  // has captured the blob (classic Chromium gotcha) — the restore key is the only de-anon path.
+  setTimeout(() => {
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  }, 1500);
 }
 
-function friendlyError(message: string): string {
+function friendlyError(message: string, fileName: string): string {
   if (message === "empty") {
     return "לא נמצא טקסט בקובץ (ייתכן PDF סרוק — נסו את האתר)";
   }
   if (message.startsWith(".")) {
     return `סוג קובץ לא נתמך (${message}). נתמכים: PDF, Word, טקסט`;
+  }
+  if (fileName.toLowerCase().endsWith(".pdf")) {
+    return "לא ניתן לקרוא את ה-PDF כאן (ייתכן שהוא סרוק או מוגן) — נסו את האתר";
   }
   return "שגיאה בעיבוד הקובץ";
 }
@@ -59,7 +47,18 @@ export function App() {
   const [result, setResult] = useState<Result | null>(null);
   const [error, setError] = useState("");
   const [dragging, setDragging] = useState(false);
+  const [copyState, setCopyState] = useState<"idle" | "ok" | "fail">("idle");
   const inputRef = useRef<HTMLInputElement>(null);
+
+  const copyRedacted = useCallback(async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopyState("ok");
+    } catch {
+      setCopyState("fail");
+    }
+    setTimeout(() => setCopyState("idle"), 1600);
+  }, []);
 
   const handleFile = useCallback(async (file: File) => {
     setStatus("working");
@@ -77,7 +76,7 @@ export function App() {
       setResult({ redacted: anonymizedText, key, baseName });
       setStatus("done");
     } catch (err) {
-      setError(friendlyError(err instanceof Error ? err.message : String(err)));
+      setError(friendlyError(err instanceof Error ? err.message : String(err), file.name));
       setStatus("error");
     }
   }, []);
@@ -171,10 +170,14 @@ export function App() {
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
-              onClick={() => navigator.clipboard.writeText(result.redacted)}
+              onClick={() => void copyRedacted(result.redacted)}
               className="h-11 flex-1 rounded-full bg-black px-4 text-sm font-semibold text-white transition hover:brightness-110"
             >
-              העתק טקסט מוסתר
+              {copyState === "ok"
+                ? "הועתק ✓"
+                : copyState === "fail"
+                  ? "ההעתקה נכשלה — סמנו ידנית"
+                  : "העתק טקסט מוסתר"}
             </button>
             <button
               type="button"
