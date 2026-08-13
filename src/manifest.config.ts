@@ -17,6 +17,21 @@ export default defineManifest({
   action: {
     default_popup: "src/popup/index.html",
   },
+  // Inline redaction inside AI chat composers. Fixed host list (Store trust) — never <all_urls>.
+  // The deterministic engine is pure JS and runs in the content script's isolated world; no host
+  // permissions needed beyond these matches, and no model (NER is added later via an offscreen doc).
+  content_scripts: [
+    {
+      matches: [
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*",
+        "https://claude.ai/*",
+        "https://gemini.google.com/*",
+      ],
+      js: ["src/content/index.ts"],
+      run_at: "document_idle",
+    },
+  ],
   content_security_policy: {
     extension_pages:
       "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' https://huggingface.co https://*.huggingface.co https://*.hf.co",

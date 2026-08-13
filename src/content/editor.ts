@@ -1,0 +1,142 @@
+/**
+ * DOM text operations for AI-chat composers. Two editor families exist across the target sites:
+ * plain <textarea> (some inputs) and contenteditable rich editors (ProseMirror on ChatGPT, Lexical
+ * on Claude, Gemini's editor). Every mutation goes through the one path each family treats as a
+ * native edit, so the framework's model stays in sync (proven in the phase-0 spike).
+ */
+
+export type InputEl = HTMLTextAreaElement | HTMLInputElement;
+export type EditableEl = HTMLElement;
+export type Composer = InputEl | EditableEl;
+
+export function isInput(el: Element | null | undefined): el is InputEl {
+  return !!el && (el.tagName === "TEXTAREA" || el.tagName === "INPUT");
+}
+
+/** The composer the user is currently editing: a focused textarea/input or a contenteditable. */
+export function focusedComposer(): Composer | null {
+  const el = document.activeElement as HTMLElement | null;
+  if (!el) {
+    return null;
+  }
+  if (isInput(el)) {
+    return el;
+  }
+  if (el.isContentEditable) {
+    return el;
+  }
+  return null;
+}
+
+export function getText(el: Composer): string {
+  return isInput(el) ? el.value : el.textContent ?? "";
+}
+
+/** Replace the entire composer content with `text`, as one native edit. */
+export function setWholeText(el: Composer, text: string): boolean {
+  if (isInput(el)) {
+    el.focus();
+    setInputValue(el, text);
+    return true;
+  }
+  el.focus();
+  const sel = window.getSelection();
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  sel?.removeAllRanges();
+  sel?.addRange(range);
+  return document.execCommand("insertText", false, text);
+}
+
+/** Set a React-controlled input's value via the native setter so React's onChange still fires. */
+function setInputValue(el: InputEl, text: string): void {
+  const proto = el.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+  if (setter) {
+    setter.call(el, text);
+  } else {
+    el.value = text;
+  }
+  el.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+export interface SelectionCtx {
+  readonly value: string;
+  readonly rect: DOMRect;
+  /** True when the selection sits inside an editable composer (offer redact); false = read-only (offer restore). */
+  readonly inEditable: boolean;
+}
+
+/** The current non-empty selection with where it is, or null. Handles both input and contenteditable. */
+export function currentSelection(): SelectionCtx | null {
+  const active = document.activeElement as HTMLElement | null;
+  if (
+    isInput(active) &&
+    active.selectionStart != null &&
+    active.selectionEnd != null &&
+    active.selectionStart !== active.selectionEnd
+  ) {
+    return {
+      value: active.value.slice(active.selectionStart, active.selectionEnd),
+      rect: active.getBoundingClientRect(),
+      inEditable: true,
+    };
+  }
+  const sel = window.getSelection();
+  if (sel && sel.rangeCount > 0 && !sel.isCollapsed) {
+    const range = sel.getRangeAt(0);
+    return {
+      value: sel.toString(),
+      rect: range.getBoundingClientRect(),
+      inEditable: !!closestEditable(range.startContainer),
+    };
+  }
+  return null;
+}
+
+/** Replace just the current selection with `text` (used by restore). Falls back to raw DOM for
+ *  read-only assistant messages, which are not editable. */
+export function replaceSelection(text: string): boolean {
+  const active = document.activeElement as HTMLElement | null;
+  if (
+    isInput(active) &&
+    active.selectionStart != null &&
+    active.selectionEnd != null &&
+    active.selectionStart !== active.selectionEnd
+  ) {
+    active.setRangeText(text, active.selectionStart, active.selectionEnd, "end");
+    active.dispatchEvent(new Event("input", { bubbles: true }));
+    return true;
+  }
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0 || sel.isCollapsed) {
+    return false;
+  }
+  const range = sel.getRangeAt(0);
+  const editable = closestEditable(range.startContainer);
+  if (editable) {
+    editable.focus();
+    if (document.execCommand("insertText", false, text)) {
+      return true;
+    }
+  }
+  try {
+    range.deleteContents();
+    range.insertNode(document.createTextNode(text));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function closestEditable(node: Node | null): HTMLElement | null {
+  let el: HTMLElement | null =
+    node && node.nodeType === 1 ? (node as HTMLElement) : node?.parentElement ?? null;
+  while (el) {
+    if (el.isContentEditable) {
+      return el;
+    }
+    el = el.parentElement;
+  }
+  return null;
+}
