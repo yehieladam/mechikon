@@ -1,65 +1,96 @@
-// Phase-0 spike content script (button edition). Two things, both impossible to miss:
-//  1. A "loaded" toast on page load  -> proves the content script actually injected.
-//  2. A fixed floating button        -> click to replace the current selection in place,
-//                                        no dependence on the site's right-click menu.
+// Phase-0 spike — REDACT MODE edition.
+// Toggle a mode ON (button turns green, cursor becomes a crosshair, a banner shows).
+// While ON: every time you finish selecting text it is redacted in place automatically,
+// no trip to the button. Toggle OFF to stop. This is the real target UX, felt early.
 (() => {
-  const TOKEN = "[ID_1]"; // real production token shape — also proves it survives the editor
+  const TOKEN = "[ID_1]"; // real production token shape — proves it survives the editor
 
-  // --- 1. prove injection: a toast the moment we load ---------------------------------
+  let active = false;
+  let btn = null;
+
   boot();
 
   function boot() {
-    if (document.body) {
-      toast("מחיקון spike נטען ✓  (סמן טקסט ולחץ על הכפתור)", 4000);
-      mountButton();
-    } else {
+    if (!document.body) {
       window.addEventListener("DOMContentLoaded", boot, { once: true });
+      return;
     }
+    mountButton();
+    // Redact whenever a selection is completed (mouse release or keyboard shift-select).
+    document.addEventListener("mouseup", onSelectionDone, true);
+    document.addEventListener("keyup", onSelectionDone, true);
+    toast("מחיקון spike נטען ✓  (לחץ על הכפתור כדי להפעיל מצב הסתרה)", 4000);
   }
 
-  // --- 2. the floating button ---------------------------------------------------------
   function mountButton() {
     const host = document.createElement("div");
     host.style.cssText = "position:fixed;z-index:2147483647;bottom:20px;left:20px;";
     const shadow = host.attachShadow({ mode: "open" });
-    const btn = document.createElement("button");
-    btn.textContent = "מחיקון: הסתר בחירה";
-    btn.style.cssText =
-      "font:14px/1 system-ui,sans-serif;background:#2C1608;color:#F7F4EF;border:0;" +
-      "padding:12px 16px;border-radius:10px;cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,.3);";
-    // mousedown preventDefault -> clicking the button does NOT steal focus / clear the
-    // selection in the editor. Critical: without this the selection is gone by click time.
-    btn.addEventListener("mousedown", (e) => e.preventDefault());
-    btn.addEventListener("click", () => toast(replaceSelection(TOKEN), 6000));
+    btn = document.createElement("button");
+    btn.addEventListener("mousedown", (e) => e.preventDefault()); // don't steal selection
+    btn.addEventListener("click", toggle);
     shadow.appendChild(btn);
     document.body.appendChild(host);
+    paintButton();
   }
 
-  // --- the actual replace logic (what the spike is really testing) --------------------
-  function replaceSelection(token) {
-    const active = document.activeElement;
+  function toggle() {
+    active = !active;
+    paintButton();
+    // Signal the mode on the whole page: crosshair cursor.
+    document.documentElement.style.cursor = active ? "crosshair" : "";
+    toast(active ? "מצב הסתרה פעיל — סמן טקסט והוא יוסתר" : "מצב הסתרה כבוי", 2500);
+  }
+
+  function paintButton() {
+    btn.textContent = active ? "● מצב הסתרה פעיל (כבה)" : "מחיקון: הפעל מצב הסתרה";
+    btn.style.cssText =
+      "font:14px/1 system-ui,sans-serif;border:0;padding:12px 16px;border-radius:10px;" +
+      "cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,.3);color:#fff;" +
+      (active ? "background:#1b8a5a;" : "background:#2C1608;");
+  }
+
+  function onSelectionDone(e) {
+    if (!active) {
+      return;
+    }
+    // Ignore events on our own button (shadow host is outside the document tree anyway).
+    if (e && e.target && e.target.closest && e.target.closest("button")) {
+      return;
+    }
+    // Let the selection settle, then redact it.
+    setTimeout(() => {
+      const msg = redactCurrentSelection(TOKEN);
+      if (msg) {
+        toast(msg, 4000);
+      }
+    }, 0);
+  }
+
+  function redactCurrentSelection(token) {
+    const activeEl = document.activeElement;
 
     // (1) plain textarea / input
     if (
-      active &&
-      (active.tagName === "TEXTAREA" || active.tagName === "INPUT") &&
-      active.selectionStart != null &&
-      active.selectionStart !== active.selectionEnd
+      activeEl &&
+      (activeEl.tagName === "TEXTAREA" || activeEl.tagName === "INPUT") &&
+      activeEl.selectionStart != null &&
+      activeEl.selectionStart !== activeEl.selectionEnd
     ) {
       try {
-        const before = active.value.slice(active.selectionStart, active.selectionEnd);
-        active.setRangeText(token, active.selectionStart, active.selectionEnd, "end");
-        active.dispatchEvent(new Event("input", { bubbles: true }));
-        return `OK [1] textarea/input: "${before}" → ${token}`;
+        const before = activeEl.value.slice(activeEl.selectionStart, activeEl.selectionEnd);
+        activeEl.setRangeText(token, activeEl.selectionStart, activeEl.selectionEnd, "end");
+        activeEl.dispatchEvent(new Event("input", { bubbles: true }));
+        return `הוסתר: "${before}" → ${token}`;
       } catch (err) {
-        return "FAIL [1] input: " + errMsg(err);
+        return "שגיאה [input]: " + errMsg(err);
       }
     }
 
-    // (2) contenteditable — execCommand insertText (the native-edit path)
+    // (2) contenteditable — execCommand insertText (native-edit path)
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0 || sel.isCollapsed) {
-      return "אין בחירה — סמן טקסט קודם, ואז לחץ (בלי ללחוץ בשום מקום אחר)";
+      return ""; // nothing selected — silent (mode stays on)
     }
     const picked = sel.toString();
     try {
@@ -67,20 +98,18 @@
       if (editable) {
         editable.focus();
       }
-      const ok = document.execCommand("insertText", false, token);
-      if (ok) {
-        return `OK [2] execCommand: "${picked}" → ${token}`;
+      if (document.execCommand("insertText", false, token)) {
+        return `הוסתר: "${picked}" → ${token}`;
       }
     } catch (err) {
       // fall through
     }
 
-    // (3) fallback — clipboard, never corrupt editor state silently
     try {
       navigator.clipboard.writeText(token);
-      return `FALLBACK [3] לא הוחלף במקום — ${token} הועתק, הדבק ידנית`;
+      return `לא הוחלף במקום — ${token} הועתק, הדבק ידנית`;
     } catch (err) {
-      return "FAIL [3] clipboard: " + errMsg(err);
+      return "שגיאה: " + errMsg(err);
     }
   }
 
@@ -114,5 +143,5 @@
   }
 
   // eslint-disable-next-line no-console
-  console.log("[mechikon spike] content script loaded on", location.host);
+  console.log("[mechikon spike] redact-mode content script loaded on", location.host);
 })();
