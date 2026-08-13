@@ -10,6 +10,7 @@
   },
   "scripts": {
     "dev": "vite",
+    "prebuild": "node scripts/vendor-ort.mjs",
     "build": "vite build",
     "dev:web": "vite --config web/vite.config.ts",
     "vendor:ocr": "node scripts/fetch-tesseract-assets.mjs",

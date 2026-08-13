@@ -8,6 +8,7 @@
  *
  * Deterministic only for now (instant, no model). NER (names/orgs) arrives later via an offscreen doc.
  */
+import type { Span } from "@engine/types";
 import { RedactSession } from "./session";
 import {
   currentSelection,
@@ -168,13 +169,16 @@ function updateChip() {
 }
 
 // ---- redact-all (the chip) -----------------------------------------------------------
-function redactAll() {
+async function redactAll() {
   const composer = focusedComposer() ?? lastComposer;
   if (!composer) {
     return;
   }
   const text = getText(composer);
-  const { text: redacted, newRows } = session.redact(text);
+  // NER (names/orgs) runs in the offscreen model via the background worker. If the model is still
+  // loading it times out fast and we redact deterministically now; names get caught next time.
+  const nerSpans = await requestNer(text);
+  const { text: redacted, newRows } = session.redact(text, nerSpans);
   const withInstruction =
     redacted.includes(INSTRUCTION_MARKER) || newRows.length === 0
       ? redacted
@@ -182,6 +186,29 @@ function redactAll() {
   setWholeText(composer, withInstruction);
   updateChip();
   showToast(newRows.length > 0 ? `הוסתרו ${newRows.length} פרטים` : "לא נמצאו פרטים חדשים להסתרה");
+}
+
+/** Ask the offscreen NER model (via the SW) for name/org/location spans; empty on timeout/not-ready. */
+function requestNer(text: string): Promise<Span[]> {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (spans: Span[]) => {
+      if (!done) {
+        done = true;
+        resolve(spans);
+      }
+    };
+    const timer = window.setTimeout(() => finish([]), 8000);
+    try {
+      chrome.runtime.sendMessage({ type: "ner:request", text }, (resp) => {
+        window.clearTimeout(timer);
+        finish(resp?.ok ? (resp.spans as Span[]) : []);
+      });
+    } catch {
+      window.clearTimeout(timer);
+      finish([]);
+    }
+  });
 }
 
 // ---- selection popover: manual redact / restore --------------------------------------

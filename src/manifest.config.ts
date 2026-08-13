@@ -17,7 +17,11 @@ export default defineManifest({
   action: {
     default_popup: "src/popup/index.html",
   },
-  permissions: ["storage"],
+  permissions: ["storage", "offscreen"],
+  background: {
+    service_worker: "src/background/index.ts",
+    type: "module",
+  },
   // Inline redaction inside AI chat composers. Fixed host list (Store trust) — never <all_urls>.
   // The deterministic engine is pure JS and runs in the content script's isolated world; no host
   // permissions needed beyond these matches, and no model (NER is added later via an offscreen doc).
@@ -34,7 +38,10 @@ export default defineManifest({
     },
   ],
   content_security_policy: {
+    // blob: + worker-src mirror the web app's proven CSP — ORT/transformers spin up a blob worker and
+    // fetch the model over HF (weights redirect to the regional *.hf.co Xet CDN). ORT runtime itself is
+    // vendored locally (script-src 'self'), so cdn.jsdelivr.net is deliberately NOT allowed.
     extension_pages:
-      "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' https://huggingface.co https://*.huggingface.co https://*.hf.co",
+      "script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; object-src 'self'; connect-src 'self' blob: https://huggingface.co https://*.huggingface.co https://*.hf.co",
   },
 });

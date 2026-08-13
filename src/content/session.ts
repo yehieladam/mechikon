@@ -39,8 +39,8 @@ export class RedactSession {
    * safe: existing [LABEL_n] tokens are not re-detected, and anonymize skips indices already present,
    * so numbering stays consistent. New key rows are merged into the session key (deduped by placeholder).
    */
-  redact(text: string): { text: string; newRows: KeyRow[] } {
-    const extra: Span[] = manualSpans(text, this.manualTerms);
+  redact(text: string, nerSpans: readonly Span[] = []): { text: string; newRows: KeyRow[] } {
+    const extra: Span[] = [...nerSpans, ...manualSpans(text, this.manualTerms)];
     const result = anonymizeWith(text, extra);
     const known = new Set(this.key.map((row) => row.placeholder));
     const newRows = result.key.filter((row) => !known.has(row.placeholder));

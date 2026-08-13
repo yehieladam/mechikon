@@ -189,6 +189,12 @@ export interface HebrewNerOptions {
    * Set before the pipeline compiles.
    */
   readonly numThreads?: number;
+  /**
+   * Directory the ONNX WASM runtime files are served from (trailing slash). The web app leaves this
+   * unset so transformers uses its default CDN (cdn.jsdelivr.net, allowed via CSP). The MV3 extension
+   * MUST set it to a local `chrome.runtime.getURL("vendor/ort/")` — remote runtime code is CSP-blocked.
+   */
+  readonly wasmPaths?: string;
 }
 
 /** Async detection facade — same span shape as the deterministic recognizers. */
@@ -211,6 +217,10 @@ export async function createHebrewNer(options: HebrewNerOptions = {}): Promise<H
   const wasmBackend = transformers.env.backends.onnx.wasm;
   if (options.numThreads !== undefined && wasmBackend) {
     wasmBackend.numThreads = options.numThreads;
+  }
+  if (options.wasmPaths !== undefined && wasmBackend) {
+    // Load the ORT runtime from the bundled local copy instead of the default remote CDN (MV3 CSP).
+    wasmBackend.wasmPaths = options.wasmPaths;
   }
   const { pipeline } = transformers;
   const classifier = await pipeline("token-classification", MODEL_ID, {
