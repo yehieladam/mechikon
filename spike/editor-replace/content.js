@@ -1,18 +1,20 @@
-// Phase-0 spike — REDACT MODE + consistent tokens.
-// Toggle mode ON; then selecting any text redacts it. Rules proven here:
-//  - same value  -> same token, and ALL its occurrences in the field are redacted
-//  - new value   -> a fresh token with the next number
-//  - token type follows the value: digits -> [NUM_n], otherwise -> [NAME_n]
-// (The real extension will swap this toy classifier for the engine's real recognizers,
-//  which mint [ID_n]/[PHONE_n]/[NAME_n]/... — but the SESSION/consistency logic is the same.)
+// Phase-0 spike — full round trip: redact -> instruct the AI -> restore.
+//  - Toggle redact mode; selecting text redacts it (same value=same token, all occurrences, typed).
+//  - When the first token is added to a field, an instruction is appended telling the AI the
+//    bracketed values are masks and must be kept verbatim in its reply (token-survival mitigation).
+//  - "שחזר בחירה" reverses tokens back to the original values using the session map.
 (() => {
-  let active = false;
-  let btn = null;
+  let redactMode = false;
+  let redactBtn = null;
 
-  // The session: value -> token, plus a counter per type. Lives for the page's lifetime,
-  // so the same name/number always maps to the same token across selections.
+  // Session: value -> token, counter per type, and the marker we use to avoid double-instructing.
   const session = new Map();
   const counters = Object.create(null);
+
+  const INSTRUCTION =
+    "  [הנחיה למערכת: ערכים בסוגריים מרובעים כמו [NAME_1] או [NUM_1] הם מסכות למידע רגיש. " +
+    "התייחס אליהם בתשובתך והשאר אותם בדיוק כפי שהם, ללא שינוי, כדי שנוכל לשחזר את המידע המקורי.]";
+  const INSTRUCTION_MARKER = "[הנחיה למערכת:";
 
   boot();
 
@@ -21,44 +23,58 @@
       window.addEventListener("DOMContentLoaded", boot, { once: true });
       return;
     }
-    mountButton();
+    mountButtons();
     document.addEventListener("mouseup", onSelectionDone, true);
     document.addEventListener("keyup", onSelectionDone, true);
-    toast("מחיקון spike נטען ✓  (לחץ להפעיל מצב הסתרה)", 4000);
+    toast("מחיקון spike נטען ✓", 3500);
   }
 
-  function mountButton() {
+  function mountButtons() {
     const host = document.createElement("div");
-    host.style.cssText = "position:fixed;z-index:2147483647;bottom:20px;left:20px;";
+    host.style.cssText =
+      "position:fixed;z-index:2147483647;bottom:20px;left:20px;display:flex;gap:8px;flex-direction:column;align-items:flex-start;";
     const shadow = host.attachShadow({ mode: "open" });
-    btn = document.createElement("button");
-    btn.addEventListener("mousedown", (e) => e.preventDefault());
-    btn.addEventListener("click", toggle);
-    shadow.appendChild(btn);
+
+    redactBtn = document.createElement("button");
+    redactBtn.addEventListener("mousedown", (e) => e.preventDefault());
+    redactBtn.addEventListener("click", toggleRedact);
+
+    const restoreBtn = document.createElement("button");
+    restoreBtn.textContent = "שחזר בחירה";
+    restoreBtn.style.cssText = btnCss("#4a3aff");
+    restoreBtn.addEventListener("mousedown", (e) => e.preventDefault());
+    restoreBtn.addEventListener("click", () => toast(restoreSelection(), 5000));
+
+    shadow.appendChild(redactBtn);
+    shadow.appendChild(restoreBtn);
     document.body.appendChild(host);
-    paintButton();
+    paintRedactBtn();
   }
 
-  function toggle() {
-    active = !active;
-    paintButton();
-    document.documentElement.style.cursor = active ? "crosshair" : "";
-    toast(active ? "מצב הסתרה פעיל — סמן טקסט להסתרה" : "מצב הסתרה כבוי", 2500);
-  }
-
-  function paintButton() {
-    btn.textContent = active ? "● מצב הסתרה פעיל (כבה)" : "מחיקון: הפעל מצב הסתרה";
-    btn.style.cssText =
+  function btnCss(bg) {
+    return (
       "font:14px/1 system-ui,sans-serif;border:0;padding:12px 16px;border-radius:10px;" +
-      "cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,.3);color:#fff;" +
-      (active ? "background:#1b8a5a;" : "background:#2C1608;");
+      "cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,.3);color:#fff;background:" + bg + ";"
+    );
   }
 
-  // ---- token session (the important part) --------------------------------------------
+  function toggleRedact() {
+    redactMode = !redactMode;
+    paintRedactBtn();
+    document.documentElement.style.cursor = redactMode ? "crosshair" : "";
+    toast(redactMode ? "מצב הסתרה פעיל — סמן טקסט" : "מצב הסתרה כבוי", 2200);
+  }
+
+  function paintRedactBtn() {
+    redactBtn.textContent = redactMode ? "● מצב הסתרה פעיל (כבה)" : "מחיקון: הפעל מצב הסתרה";
+    redactBtn.style.cssText = btnCss(redactMode ? "#1b8a5a" : "#2C1608");
+  }
+
+  // ---- token session -----------------------------------------------------------------
   function tokenFor(value) {
     const v = value.trim();
     if (session.has(v)) {
-      return session.get(v); // same value -> same token
+      return session.get(v);
     }
     const type = classify(v);
     counters[type] = (counters[type] || 0) + 1;
@@ -67,7 +83,6 @@
     return token;
   }
 
-  // Toy classifier for the spike. Real engine does validated ID/phone/IBAN + Hebrew NER.
   function classify(v) {
     const digits = v.replace(/\D/g, "");
     if (digits.length >= 3 && /^[\d\-\s()+]+$/.test(v)) {
@@ -76,9 +91,9 @@
     return "NAME";
   }
 
-  // ---- redaction ---------------------------------------------------------------------
+  // ---- redact ------------------------------------------------------------------------
   function onSelectionDone(e) {
-    if (!active) {
+    if (!redactMode) {
       return;
     }
     if (e && e.target && e.target.closest && e.target.closest("button")) {
@@ -90,7 +105,7 @@
   function redactSelection() {
     const el = document.activeElement;
 
-    // (1) plain textarea / input — replace ALL occurrences in the value string
+    // (1) textarea / input
     if (
       el &&
       (el.tagName === "TEXTAREA" || el.tagName === "INPUT") &&
@@ -103,16 +118,17 @@
       }
       const token = tokenFor(value);
       if (token.indexOf(value) !== -1) {
-        return; // safety: token contains the value, would loop — skip
+        return;
       }
       const count = occurrences(el.value, value);
       el.value = el.value.split(value).join(token);
+      ensureInstructionInput(el);
       el.dispatchEvent(new Event("input", { bubbles: true }));
       toast('הוסתר "' + value + '" → ' + token + "  (" + count + " מופעים)", 4000);
       return;
     }
 
-    // (2) contenteditable — replace ALL occurrences via repeated native inserts
+    // (2) contenteditable
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0 || sel.isCollapsed) {
       return;
@@ -127,18 +143,80 @@
     }
     const token = tokenFor(value);
     if (token.indexOf(value) !== -1) {
-      return; // safety
+      return;
     }
     const count = replaceAllEditable(editable, value, token);
     if (count > 0) {
+      ensureInstructionEditable(editable);
       toast('הוסתר "' + value + '" → ' + token + "  (" + count + " מופעים)", 4000);
     } else {
-      // fell back
       navigator.clipboard.writeText(token).catch(() => {});
       toast("לא הוחלף במקום — " + token + " הועתק, הדבק ידנית", 4000);
     }
   }
 
+  // ---- instruction injection (token-survival) ----------------------------------------
+  function ensureInstructionInput(el) {
+    if (el.value.indexOf(INSTRUCTION_MARKER) !== -1) {
+      return;
+    }
+    el.value = el.value + INSTRUCTION;
+  }
+
+  function ensureInstructionEditable(editable) {
+    if ((editable.textContent || "").indexOf(INSTRUCTION_MARKER) !== -1) {
+      return;
+    }
+    const range = document.createRange();
+    range.selectNodeContents(editable);
+    range.collapse(false); // caret to end
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    editable.focus();
+    document.execCommand("insertText", false, INSTRUCTION);
+  }
+
+  // ---- restore -----------------------------------------------------------------------
+  function restoreSelection() {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) {
+      return "סמן את תשובת ה-AI (עם הטוקנים) ואז לחץ שחזר";
+    }
+    const original = sel.toString();
+    const restored = applyRestore(original);
+    if (restored === original) {
+      return "לא נמצאו טוקנים בבחירה (או שה-AI שינה אותם)";
+    }
+    const editable = closestEditable(sel.getRangeAt(0).startContainer);
+    if (editable) {
+      editable.focus();
+      if (document.execCommand("insertText", false, restored)) {
+        return "שוחזר ✓";
+      }
+    }
+    // static DOM (assistant message is not editable) — replace the range contents directly
+    try {
+      const range = sel.getRangeAt(0);
+      range.deleteContents();
+      range.insertNode(document.createTextNode(restored));
+      return "שוחזר ✓ (הוצג במקום)";
+    } catch (err) {
+      navigator.clipboard.writeText(restored).catch(() => {});
+      return "שוחזר → הועתק ללוח (הדבק לראות)";
+    }
+  }
+
+  function applyRestore(text) {
+    let out = text;
+    // reverse map token -> value; longer tokens first is irrelevant (unique), simple pass
+    session.forEach((token, value) => {
+      out = out.split(token).join(value);
+    });
+    return out;
+  }
+
+  // ---- helpers -----------------------------------------------------------------------
   function replaceAllEditable(editable, value, token) {
     let count = 0;
     for (let i = 0; i < 500; i++) {
@@ -158,7 +236,6 @@
     return count;
   }
 
-  // First occurrence of `value` inside a single text node under `root`.
   function firstOccurrenceRange(root, value) {
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
     let node;
@@ -175,9 +252,6 @@
   }
 
   function occurrences(haystack, needle) {
-    if (!needle) {
-      return 0;
-    }
     let n = 0;
     let i = haystack.indexOf(needle);
     while (i !== -1) {
@@ -200,7 +274,7 @@
 
   function toast(text, ms) {
     const host = document.createElement("div");
-    host.style.cssText = "position:fixed;z-index:2147483647;bottom:70px;left:20px;";
+    host.style.cssText = "position:fixed;z-index:2147483647;bottom:120px;left:20px;";
     const shadow = host.attachShadow({ mode: "open" });
     const box = document.createElement("div");
     box.textContent = text;
@@ -213,5 +287,5 @@
   }
 
   // eslint-disable-next-line no-console
-  console.log("[mechikon spike] token-session content script loaded on", location.host);
+  console.log("[mechikon spike] round-trip content script loaded on", location.host);
 })();
