@@ -23,10 +23,11 @@ import {
 const session = new RedactSession();
 let lastComposer: Composer | null = null;
 
+// Single line, no leading newline (ProseMirror/Lexical can drop text after a \n in an execCommand
+// insert) and no placeholder-shaped examples (restore would otherwise rewrite them inside this note).
 const INSTRUCTION =
-  "\n\n[הנחיה למערכת: ערכים בסוגריים מרובעים כמו [ID_1] או [NAME_1] הם מסכות למידע רגיש. " +
-  "התייחס אליהם בתשובתך והשאר אותם בדיוק כפי שהם, ללא שינוי, כדי שנוכל לשחזר את המידע המקורי.]";
-const INSTRUCTION_MARKER = "[הנחיה למערכת:";
+  "  הערה חשובה: בטקסט יש אסימונים בסוגריים מרובעים שמחליפים מידע רגיש. אנא השאר כל אסימון בדיוק כפי שהוא בתשובתך, ללא שינוי, כדי שנוכל לשחזר את המידע המקורי.";
+const INSTRUCTION_MARKER = "הערה חשובה: בטקסט יש אסימונים";
 
 // ---- UI (shadow DOM, immune to host page CSS) ---------------------------------------
 const ui = mountUi();
