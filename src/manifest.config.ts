@@ -38,10 +38,10 @@ export default defineManifest({
     },
   ],
   content_security_policy: {
-    // blob: + worker-src mirror the web app's proven CSP — ORT/transformers spin up a blob worker and
-    // fetch the model over HF (weights redirect to the regional *.hf.co Xet CDN). ORT runtime itself is
-    // vendored locally (script-src 'self'), so cdn.jsdelivr.net is deliberately NOT allowed.
+    // MV3 forbids blob: in worker-src and is strict here. ORT runs single-threaded (numThreads 1), so no
+    // blob worker is needed. Model weights download over HF (redirect to the regional *.hf.co Xet CDN);
+    // the ORT runtime is vendored locally (script-src 'self'), so no CDN is allowed for code.
     extension_pages:
-      "script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; object-src 'self'; connect-src 'self' blob: https://huggingface.co https://*.huggingface.co https://*.hf.co",
+      "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' https://huggingface.co https://*.huggingface.co https://*.hf.co",
   },
 });
