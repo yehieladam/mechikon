@@ -35,81 +35,106 @@ function mountUi() {
   host.id = "mechikon-root";
   const shadow = host.attachShadow({ mode: "open" });
 
-  // Design language mirrors the mechikon site: Apple system font, white translucent glass
-  // (backdrop blur), near-black ink (#0a0a0a), emerald action, yellow detection accent, pill buttons.
+  // Modern glass, black & white. State lives in one dot: ORANGE while sensitive values are detected,
+  // GREEN once redacted. Buttons are frosted black glass. Matches the mechikon site (ink on white,
+  // pill buttons, hairline borders) with an Apple-grade glass treatment.
   const style = document.createElement("style");
   style.textContent = `
     :host {
       --ink: #0a0a0a;
-      --emerald: #10b981;
-      --emerald-press: #059669;
-      --accent: #facc15;
-      --glass: rgba(255,255,255,.72);
-      --hairline: rgba(0,0,0,.08);
-      --shadow: 0 8px 30px rgba(0,0,0,.12), 0 1px 2px rgba(0,0,0,.06);
+      --orange: #ff9500;   /* detected  */
+      --green: #34c759;    /* protected */
+      --glass-card: rgba(255,255,255,.62);
+      --glass-btn: rgba(12,12,12,.84);
+      --hairline: rgba(0,0,0,.10);
+      --shadow: 0 1px 2px rgba(0,0,0,.06), 0 14px 36px -10px rgba(0,0,0,.26);
       --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+      --ease: cubic-bezier(.22,.9,.3,1);
     }
+    * { box-sizing: border-box; }
     .chip, .pop, .toast { position: fixed; z-index: 2147483647; direction: rtl; font-family: var(--font); }
-    button { font-family: var(--font); cursor: pointer; border: 0; }
+    button { font-family: var(--font); cursor: pointer; border: 0; -webkit-font-smoothing: antialiased; }
 
     .chip {
-      bottom: 22px; inset-inline-start: 22px; display: none; align-items: center; gap: 12px;
-      background: var(--glass); -webkit-backdrop-filter: blur(20px) saturate(180%);
-      backdrop-filter: blur(20px) saturate(180%); color: var(--ink);
-      padding: 10px 12px 10px 16px; border-radius: 16px; border: .5px solid var(--hairline);
-      box-shadow: var(--shadow); animation: pop .28s cubic-bezier(.2,.8,.2,1);
+      bottom: 24px; inset-inline-start: 24px; display: none; align-items: center; gap: 13px;
+      background: var(--glass-card); -webkit-backdrop-filter: blur(28px) saturate(200%);
+      backdrop-filter: blur(28px) saturate(200%); border: .5px solid var(--hairline);
+      border-radius: 20px; padding: 11px 12px 11px 18px; box-shadow: var(--shadow);
+      animation: rise .34s var(--ease);
     }
-    .chip .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent);
-      box-shadow: 0 0 0 4px rgba(250,204,21,.22); flex: 0 0 auto; }
-    .chip .txt { display: flex; flex-direction: column; line-height: 1.25; }
-    .chip .brand { font-size: 11px; font-weight: 600; letter-spacing: .01em; color: rgba(10,10,10,.5); }
-    .chip .label { font-size: 14px; font-weight: 500; }
-    .chip button {
-      background: var(--emerald); color: #fff; font-size: 14px; font-weight: 600;
-      padding: 0 18px; height: 44px; border-radius: 999px; transition: background .15s, transform .1s;
+    /* glass sheen */
+    .chip::before {
+      content: ""; position: absolute; inset: 0; border-radius: 20px; pointer-events: none;
+      background: linear-gradient(180deg, rgba(255,255,255,.55), rgba(255,255,255,0) 42%);
     }
-    .chip button:hover { background: var(--emerald-press); }
-    .chip button:active { transform: scale(.97); }
+    .dot {
+      width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto; background: var(--orange);
+      box-shadow: 0 0 0 4px rgba(255,149,0,.16), 0 0 10px rgba(255,149,0,.55);
+      transition: background .35s var(--ease), box-shadow .35s var(--ease);
+    }
+    .dot.green {
+      background: var(--green);
+      box-shadow: 0 0 0 4px rgba(52,199,89,.16), 0 0 10px rgba(52,199,89,.55);
+    }
+    .info { display: flex; flex-direction: column; gap: 1px; line-height: 1.2; }
+    .brand { font-size: 10px; font-weight: 700; letter-spacing: .1em; color: rgba(10,10,10,.4); }
+    .label { font-size: 14px; font-weight: 600; color: var(--ink); letter-spacing: -.01em;
+      font-variant-numeric: tabular-nums; }
 
-    .pop { display: none; transform: translate(-50%, -100%); animation: pop .18s cubic-bezier(.2,.8,.2,1); }
-    .pop button {
-      background: var(--ink); color: #fff; font-size: 13px; font-weight: 600; white-space: nowrap;
-      padding: 0 16px; height: 40px; border-radius: 999px; box-shadow: var(--shadow);
+    .cta {
+      position: relative; background: var(--glass-btn); color: #fff;
+      -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+      border: .5px solid rgba(255,255,255,.18); font-size: 14px; font-weight: 600; letter-spacing: -.01em;
+      height: 42px; padding: 0 20px; border-radius: 999px;
+      box-shadow: 0 1px 2px rgba(0,0,0,.28), inset 0 1px 0 rgba(255,255,255,.22);
+      transition: transform .12s var(--ease), box-shadow .2s var(--ease);
     }
-    .pop button:active { transform: scale(.96); }
+    .cta:hover { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(0,0,0,.26), inset 0 1px 0 rgba(255,255,255,.3); }
+    .cta:active { transform: translateY(0) scale(.97); }
+
+    .pop { display: none; transform: translate(-50%, -100%); animation: rise .2s var(--ease); }
+    .pop .cta { height: 38px; padding: 0 16px; font-size: 13px; white-space: nowrap; }
 
     .toast {
-      bottom: 80px; inset-inline-start: 22px; display: none; max-width: 380px;
-      background: var(--glass); -webkit-backdrop-filter: blur(20px) saturate(180%);
-      backdrop-filter: blur(20px) saturate(180%); color: var(--ink); font-size: 14px; font-weight: 500;
-      padding: 12px 16px; border-radius: 14px; border: .5px solid var(--hairline);
-      box-shadow: var(--shadow); white-space: pre-wrap; animation: pop .28s cubic-bezier(.2,.8,.2,1);
+      bottom: 90px; inset-inline-start: 24px; display: none; align-items: center; gap: 10px; max-width: 360px;
+      background: var(--glass-card); -webkit-backdrop-filter: blur(28px) saturate(200%);
+      backdrop-filter: blur(28px) saturate(200%); border: .5px solid var(--hairline);
+      border-radius: 14px; padding: 12px 16px; box-shadow: var(--shadow);
+      color: var(--ink); font-size: 14px; font-weight: 500; animation: rise .34s var(--ease);
     }
-    @keyframes pop { from { opacity: 0; transform: translateY(6px) scale(.98); } }
-    @media (prefers-reduced-motion: reduce) { .chip, .pop, .toast { animation: none !important; } }
+    .toast::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--green); flex: 0 0 auto; }
+
+    @keyframes rise { from { opacity: 0; transform: translateY(8px) scale(.98); } }
+    @media (prefers-reduced-motion: reduce) {
+      .chip, .pop, .toast { animation: none; }
+      .cta, .dot { transition: none; }
+    }
   `;
 
   const chip = document.createElement("div");
   chip.className = "chip";
   const dot = document.createElement("span");
   dot.className = "dot";
-  const txt = document.createElement("span");
-  txt.className = "txt";
+  const info = document.createElement("span");
+  info.className = "info";
   const brand = document.createElement("span");
   brand.className = "brand";
-  brand.textContent = "מחיקון";
+  brand.dir = "ltr";
+  brand.textContent = "MECHIKON";
   const chipLabel = document.createElement("span");
   chipLabel.className = "label";
-  txt.append(brand, chipLabel);
+  info.append(brand, chipLabel);
   const chipBtn = document.createElement("button");
+  chipBtn.className = "cta";
   chipBtn.textContent = "הסתר";
   keepFocus(chipBtn);
   chipBtn.addEventListener("click", redactAll);
-  chip.append(dot, txt, chipBtn);
+  chip.append(dot, info, chipBtn);
 
   const pop = document.createElement("div");
   pop.className = "pop";
   const popBtn = document.createElement("button");
+  popBtn.className = "cta";
   keepFocus(popBtn);
   pop.append(popBtn);
 
@@ -119,7 +144,7 @@ function mountUi() {
   shadow.append(style, chip, pop, toast);
   document.documentElement.appendChild(host);
 
-  return { chipLabel, chip, pop, popBtn, toast };
+  return { chipLabel, chip, dot, chipBtn, pop, popBtn, toast };
 }
 
 /** Stop a UI button from stealing focus / clearing the page selection when pressed. */
@@ -129,8 +154,28 @@ function keepFocus(btn: HTMLElement) {
 
 function showToast(text: string) {
   ui.toast.textContent = text;
-  ui.toast.style.display = "block";
+  ui.toast.style.display = "flex";
   window.setTimeout(() => (ui.toast.style.display = "none"), 4000);
+}
+
+/** Sensitive values found but not yet redacted: orange dot + count + the redact button. */
+function setChipDetected(count: number) {
+  ui.dot.classList.remove("green");
+  ui.chipLabel.textContent = `${count} פרטים רגישים`;
+  ui.chipBtn.style.display = "";
+  ui.chip.style.display = "flex";
+}
+
+/** Everything redacted: green dot, "protected", no button (nothing left to hide). */
+function setChipProtected(count: number) {
+  ui.dot.classList.add("green");
+  ui.chipLabel.textContent = count > 0 ? `מוגן · ${count} הוסתרו` : "מוגן";
+  ui.chipBtn.style.display = "none";
+  ui.chip.style.display = "flex";
+}
+
+function hideChip() {
+  ui.chip.style.display = "none";
 }
 
 // ---- auto-detect: watch the composer -------------------------------------------------
@@ -161,11 +206,10 @@ function updateChip() {
   const text = getText(composer);
   const distinct = new Set(session.detect(text).map((s) => text.slice(s.start, s.end)));
   if (distinct.size === 0) {
-    ui.chip.style.display = "none";
+    hideChip();
     return;
   }
-  ui.chipLabel.textContent = `זוהו ${distinct.size} פרטים רגישים`;
-  ui.chip.style.display = "flex";
+  setChipDetected(distinct.size);
 }
 
 // ---- redact-all (the chip) -----------------------------------------------------------
@@ -184,7 +228,7 @@ async function redactAll() {
       ? redacted
       : redacted + INSTRUCTION;
   setWholeText(composer, withInstruction);
-  updateChip();
+  setChipProtected(newRows.length);
   showToast(newRows.length > 0 ? `הוסתרו ${newRows.length} פרטים` : "לא נמצאו פרטים חדשים להסתרה");
 }
 
