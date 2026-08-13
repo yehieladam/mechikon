@@ -1,12 +1,18 @@
-// Phase-0 spike — REDACT MODE edition.
-// Toggle a mode ON (button turns green, cursor becomes a crosshair, a banner shows).
-// While ON: every time you finish selecting text it is redacted in place automatically,
-// no trip to the button. Toggle OFF to stop. This is the real target UX, felt early.
+// Phase-0 spike — REDACT MODE + consistent tokens.
+// Toggle mode ON; then selecting any text redacts it. Rules proven here:
+//  - same value  -> same token, and ALL its occurrences in the field are redacted
+//  - new value   -> a fresh token with the next number
+//  - token type follows the value: digits -> [NUM_n], otherwise -> [NAME_n]
+// (The real extension will swap this toy classifier for the engine's real recognizers,
+//  which mint [ID_n]/[PHONE_n]/[NAME_n]/... — but the SESSION/consistency logic is the same.)
 (() => {
-  const TOKEN = "[ID_1]"; // real production token shape — proves it survives the editor
-
   let active = false;
   let btn = null;
+
+  // The session: value -> token, plus a counter per type. Lives for the page's lifetime,
+  // so the same name/number always maps to the same token across selections.
+  const session = new Map();
+  const counters = Object.create(null);
 
   boot();
 
@@ -16,10 +22,9 @@
       return;
     }
     mountButton();
-    // Redact whenever a selection is completed (mouse release or keyboard shift-select).
     document.addEventListener("mouseup", onSelectionDone, true);
     document.addEventListener("keyup", onSelectionDone, true);
-    toast("מחיקון spike נטען ✓  (לחץ על הכפתור כדי להפעיל מצב הסתרה)", 4000);
+    toast("מחיקון spike נטען ✓  (לחץ להפעיל מצב הסתרה)", 4000);
   }
 
   function mountButton() {
@@ -27,7 +32,7 @@
     host.style.cssText = "position:fixed;z-index:2147483647;bottom:20px;left:20px;";
     const shadow = host.attachShadow({ mode: "open" });
     btn = document.createElement("button");
-    btn.addEventListener("mousedown", (e) => e.preventDefault()); // don't steal selection
+    btn.addEventListener("mousedown", (e) => e.preventDefault());
     btn.addEventListener("click", toggle);
     shadow.appendChild(btn);
     document.body.appendChild(host);
@@ -37,9 +42,8 @@
   function toggle() {
     active = !active;
     paintButton();
-    // Signal the mode on the whole page: crosshair cursor.
     document.documentElement.style.cursor = active ? "crosshair" : "";
-    toast(active ? "מצב הסתרה פעיל — סמן טקסט והוא יוסתר" : "מצב הסתרה כבוי", 2500);
+    toast(active ? "מצב הסתרה פעיל — סמן טקסט להסתרה" : "מצב הסתרה כבוי", 2500);
   }
 
   function paintButton() {
@@ -50,67 +54,137 @@
       (active ? "background:#1b8a5a;" : "background:#2C1608;");
   }
 
+  // ---- token session (the important part) --------------------------------------------
+  function tokenFor(value) {
+    const v = value.trim();
+    if (session.has(v)) {
+      return session.get(v); // same value -> same token
+    }
+    const type = classify(v);
+    counters[type] = (counters[type] || 0) + 1;
+    const token = "[" + type + "_" + counters[type] + "]";
+    session.set(v, token);
+    return token;
+  }
+
+  // Toy classifier for the spike. Real engine does validated ID/phone/IBAN + Hebrew NER.
+  function classify(v) {
+    const digits = v.replace(/\D/g, "");
+    if (digits.length >= 3 && /^[\d\-\s()+]+$/.test(v)) {
+      return "NUM";
+    }
+    return "NAME";
+  }
+
+  // ---- redaction ---------------------------------------------------------------------
   function onSelectionDone(e) {
     if (!active) {
       return;
     }
-    // Ignore events on our own button (shadow host is outside the document tree anyway).
     if (e && e.target && e.target.closest && e.target.closest("button")) {
       return;
     }
-    // Let the selection settle, then redact it.
-    setTimeout(() => {
-      const msg = redactCurrentSelection(TOKEN);
-      if (msg) {
-        toast(msg, 4000);
-      }
-    }, 0);
+    setTimeout(redactSelection, 0);
   }
 
-  function redactCurrentSelection(token) {
-    const activeEl = document.activeElement;
+  function redactSelection() {
+    const el = document.activeElement;
 
-    // (1) plain textarea / input
+    // (1) plain textarea / input — replace ALL occurrences in the value string
     if (
-      activeEl &&
-      (activeEl.tagName === "TEXTAREA" || activeEl.tagName === "INPUT") &&
-      activeEl.selectionStart != null &&
-      activeEl.selectionStart !== activeEl.selectionEnd
+      el &&
+      (el.tagName === "TEXTAREA" || el.tagName === "INPUT") &&
+      el.selectionStart != null &&
+      el.selectionStart !== el.selectionEnd
     ) {
-      try {
-        const before = activeEl.value.slice(activeEl.selectionStart, activeEl.selectionEnd);
-        activeEl.setRangeText(token, activeEl.selectionStart, activeEl.selectionEnd, "end");
-        activeEl.dispatchEvent(new Event("input", { bubbles: true }));
-        return `הוסתר: "${before}" → ${token}`;
-      } catch (err) {
-        return "שגיאה [input]: " + errMsg(err);
+      const value = el.value.slice(el.selectionStart, el.selectionEnd).trim();
+      if (!value) {
+        return;
       }
+      const token = tokenFor(value);
+      if (token.indexOf(value) !== -1) {
+        return; // safety: token contains the value, would loop — skip
+      }
+      const count = occurrences(el.value, value);
+      el.value = el.value.split(value).join(token);
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      toast('הוסתר "' + value + '" → ' + token + "  (" + count + " מופעים)", 4000);
+      return;
     }
 
-    // (2) contenteditable — execCommand insertText (native-edit path)
+    // (2) contenteditable — replace ALL occurrences via repeated native inserts
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0 || sel.isCollapsed) {
-      return ""; // nothing selected — silent (mode stays on)
+      return;
     }
-    const picked = sel.toString();
-    try {
-      const editable = closestEditable(sel.getRangeAt(0).startContainer);
-      if (editable) {
-        editable.focus();
-      }
-      if (document.execCommand("insertText", false, token)) {
-        return `הוסתר: "${picked}" → ${token}`;
-      }
-    } catch (err) {
-      // fall through
+    const value = sel.toString().trim();
+    if (!value) {
+      return;
     }
+    const editable = closestEditable(sel.getRangeAt(0).startContainer);
+    if (!editable) {
+      return;
+    }
+    const token = tokenFor(value);
+    if (token.indexOf(value) !== -1) {
+      return; // safety
+    }
+    const count = replaceAllEditable(editable, value, token);
+    if (count > 0) {
+      toast('הוסתר "' + value + '" → ' + token + "  (" + count + " מופעים)", 4000);
+    } else {
+      // fell back
+      navigator.clipboard.writeText(token).catch(() => {});
+      toast("לא הוחלף במקום — " + token + " הועתק, הדבק ידנית", 4000);
+    }
+  }
 
-    try {
-      navigator.clipboard.writeText(token);
-      return `לא הוחלף במקום — ${token} הועתק, הדבק ידנית`;
-    } catch (err) {
-      return "שגיאה: " + errMsg(err);
+  function replaceAllEditable(editable, value, token) {
+    let count = 0;
+    for (let i = 0; i < 500; i++) {
+      const range = firstOccurrenceRange(editable, value);
+      if (!range) {
+        break;
+      }
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      editable.focus();
+      if (!document.execCommand("insertText", false, token)) {
+        break;
+      }
+      count += 1;
     }
+    return count;
+  }
+
+  // First occurrence of `value` inside a single text node under `root`.
+  function firstOccurrenceRange(root, value) {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+    let node;
+    while ((node = walker.nextNode())) {
+      const idx = node.nodeValue.indexOf(value);
+      if (idx !== -1) {
+        const range = document.createRange();
+        range.setStart(node, idx);
+        range.setEnd(node, idx + value.length);
+        return range;
+      }
+    }
+    return null;
+  }
+
+  function occurrences(haystack, needle) {
+    if (!needle) {
+      return 0;
+    }
+    let n = 0;
+    let i = haystack.indexOf(needle);
+    while (i !== -1) {
+      n += 1;
+      i = haystack.indexOf(needle, i + needle.length);
+    }
+    return n;
   }
 
   function closestEditable(node) {
@@ -124,10 +198,6 @@
     return null;
   }
 
-  function errMsg(err) {
-    return err && err.message ? err.message : String(err);
-  }
-
   function toast(text, ms) {
     const host = document.createElement("div");
     host.style.cssText = "position:fixed;z-index:2147483647;bottom:70px;left:20px;";
@@ -136,12 +206,12 @@
     box.textContent = text;
     box.style.cssText =
       "font:14px/1.5 system-ui,sans-serif;background:#1b8a5a;color:#fff;padding:12px 16px;" +
-      "border-radius:10px;max-width:380px;direction:rtl;box-shadow:0 4px 16px rgba(0,0,0,.3);white-space:pre-wrap;";
+      "border-radius:10px;max-width:400px;direction:rtl;box-shadow:0 4px 16px rgba(0,0,0,.3);white-space:pre-wrap;";
     shadow.appendChild(box);
     document.body.appendChild(host);
     setTimeout(() => host.remove(), ms || 5000);
   }
 
   // eslint-disable-next-line no-console
-  console.log("[mechikon spike] redact-mode content script loaded on", location.host);
+  console.log("[mechikon spike] token-session content script loaded on", location.host);
 })();
