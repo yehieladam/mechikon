@@ -1,6 +1,7 @@
 // ESLint 9 flat config (the single source of lint truth — there is intentionally NO
 // .eslintrc / .eslintignore; ESLint 9 does not read .eslintignore, ignores live below).
 import js from "@eslint/js";
+import globals from "globals";
 import tseslint from "typescript-eslint";
 import reactHooks from "eslint-plugin-react-hooks";
 
@@ -14,11 +15,17 @@ export default tseslint.config(
       "browser-poc/**",
       // Throwaway feasibility spikes (Node .mjs scripts), kept for reference — not product code.
       "spikes/**",
+      // Phase-0 throwaway editor-replace spike (plain JS, browser+chrome globals) — not product code.
+      "spike/**",
       "dist/**",
       "dist-web/**",
       "node_modules/**",
+      // Claude Code local session data incl. throwaway git worktrees (full repo copies) — never lint.
+      ".claude/**",
       // Vendored third-party OCR runtime (minified worker + wasm glue), fetched at build — never lint.
       "web/public/vendor/**",
+      // Vendored ONNX runtime for the extension (minified ORT glue), copied at build — never lint.
+      "public/vendor/**",
       // Local screenshot/verification scratch scripts (not product code, not committed).
       "_*.mjs",
       // Node build-time tooling for test fixtures (uses node globals), not shipped product code.
@@ -35,6 +42,14 @@ export default tseslint.config(
     rules: {
       "react-hooks/rules-of-hooks": "error",
       "react-hooks/exhaustive-deps": "warn",
+    },
+  },
+  {
+    // Extension runtime code (content script, offscreen doc, service worker) runs in the browser
+    // with the chrome.* API — declare those globals so no-undef doesn't flag them.
+    files: ["src/**/*.{ts,tsx}"],
+    languageOptions: {
+      globals: { ...globals.browser, ...globals.webextensions },
     },
   },
   {
