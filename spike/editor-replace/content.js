@@ -1,98 +1,81 @@
-// Phase-0 spike content script. THE question this answers: can we replace a
-// user's selection IN PLACE inside ChatGPT's / Claude's / Gemini's editor without
-// the editor reverting or desyncing? Three strategies, tried in order. A toast
-// reports which one fired so we know per-site what actually works.
+// Phase-0 spike content script (button edition). Two things, both impossible to miss:
+//  1. A "loaded" toast on page load  -> proves the content script actually injected.
+//  2. A fixed floating button        -> click to replace the current selection in place,
+//                                        no dependence on the site's right-click menu.
 (() => {
-  // Fixed Latin token — deliberately the real production token shape ([ID_1]),
-  // so the spike also proves the token itself survives the editor untouched.
-  const TOKEN = "[ID_1]";
+  const TOKEN = "[ID_1]"; // real production token shape — also proves it survives the editor
 
-  // Snapshot of the selection captured at right-click time. The context-menu
-  // click lands AFTER the native menu closes, by which point the live selection
-  // may be gone — so we grab it on `contextmenu` and hold it.
-  let snapshot = null;
+  // --- 1. prove injection: a toast the moment we load ---------------------------------
+  boot();
 
-  document.addEventListener(
-    "contextmenu",
-    () => {
-      const active = document.activeElement;
-      if (
-        active &&
-        (active.tagName === "TEXTAREA" || active.tagName === "INPUT") &&
-        active.selectionStart != null &&
-        active.selectionStart !== active.selectionEnd
-      ) {
-        snapshot = {
-          kind: "input",
-          el: active,
-          start: active.selectionStart,
-          end: active.selectionEnd,
-          text: active.value.slice(active.selectionStart, active.selectionEnd),
-        };
-        return;
-      }
-
-      const sel = window.getSelection();
-      if (sel && sel.rangeCount > 0 && !sel.isCollapsed) {
-        snapshot = {
-          kind: "range",
-          range: sel.getRangeAt(0).cloneRange(),
-          text: sel.toString(),
-        };
-        return;
-      }
-
-      snapshot = null;
-    },
-    true,
-  );
-
-  chrome.runtime.onMessage.addListener((msg) => {
-    if (!msg || msg.type !== "SPIKE_REPLACE") {
-      return;
+  function boot() {
+    if (document.body) {
+      toast("מחיקון spike נטען ✓  (סמן טקסט ולחץ על הכפתור)", 4000);
+      mountButton();
+    } else {
+      window.addEventListener("DOMContentLoaded", boot, { once: true });
     }
-    toast(replaceSelection(TOKEN));
-  });
+  }
 
+  // --- 2. the floating button ---------------------------------------------------------
+  function mountButton() {
+    const host = document.createElement("div");
+    host.style.cssText = "position:fixed;z-index:2147483647;bottom:20px;left:20px;";
+    const shadow = host.attachShadow({ mode: "open" });
+    const btn = document.createElement("button");
+    btn.textContent = "מחיקון: הסתר בחירה";
+    btn.style.cssText =
+      "font:14px/1 system-ui,sans-serif;background:#2C1608;color:#F7F4EF;border:0;" +
+      "padding:12px 16px;border-radius:10px;cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,.3);";
+    // mousedown preventDefault -> clicking the button does NOT steal focus / clear the
+    // selection in the editor. Critical: without this the selection is gone by click time.
+    btn.addEventListener("mousedown", (e) => e.preventDefault());
+    btn.addEventListener("click", () => toast(replaceSelection(TOKEN), 6000));
+    shadow.appendChild(btn);
+    document.body.appendChild(host);
+  }
+
+  // --- the actual replace logic (what the spike is really testing) --------------------
   function replaceSelection(token) {
-    if (!snapshot) {
-      return "אין בחירה — סמן טקסט ואז קליק-ימני";
-    }
+    const active = document.activeElement;
 
-    // (1) Plain textarea / input — the reliable path (setRangeText + input event).
-    if (snapshot.kind === "input") {
+    // (1) plain textarea / input
+    if (
+      active &&
+      (active.tagName === "TEXTAREA" || active.tagName === "INPUT") &&
+      active.selectionStart != null &&
+      active.selectionStart !== active.selectionEnd
+    ) {
       try {
-        const el = snapshot.el;
-        el.focus();
-        el.setRangeText(token, snapshot.start, snapshot.end, "end");
-        el.dispatchEvent(new Event("input", { bubbles: true }));
-        return `OK [1] textarea/input: "${snapshot.text}" → ${token}`;
+        const before = active.value.slice(active.selectionStart, active.selectionEnd);
+        active.setRangeText(token, active.selectionStart, active.selectionEnd, "end");
+        active.dispatchEvent(new Event("input", { bubbles: true }));
+        return `OK [1] textarea/input: "${before}" → ${token}`;
       } catch (err) {
         return "FAIL [1] input: " + errMsg(err);
       }
     }
 
-    // (2) contenteditable — execCommand("insertText") is the one edit path that
-    // ProseMirror (ChatGPT) / Lexical (Claude) / Gemini treat as a native keystroke.
+    // (2) contenteditable — execCommand insertText (the native-edit path)
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) {
+      return "אין בחירה — סמן טקסט קודם, ואז לחץ (בלי ללחוץ בשום מקום אחר)";
+    }
+    const picked = sel.toString();
     try {
-      const sel = window.getSelection();
-      sel.removeAllRanges();
-      sel.addRange(snapshot.range);
-      const editable = closestEditable(snapshot.range.startContainer);
+      const editable = closestEditable(sel.getRangeAt(0).startContainer);
       if (editable) {
         editable.focus();
-        sel.removeAllRanges();
-        sel.addRange(snapshot.range);
       }
       const ok = document.execCommand("insertText", false, token);
       if (ok) {
-        return `OK [2] execCommand insertText: "${snapshot.text}" → ${token}`;
+        return `OK [2] execCommand: "${picked}" → ${token}`;
       }
     } catch (err) {
-      // fall through to clipboard
+      // fall through
     }
 
-    // (3) Fallback — never corrupt editor state silently; hand it to the clipboard.
+    // (3) fallback — clipboard, never corrupt editor state silently
     try {
       navigator.clipboard.writeText(token);
       return `FALLBACK [3] לא הוחלף במקום — ${token} הועתק, הדבק ידנית`;
@@ -116,20 +99,18 @@
     return err && err.message ? err.message : String(err);
   }
 
-  // Shadow-DOM toast so the page's own CSS can't hide or restyle it.
-  function toast(text) {
+  function toast(text, ms) {
     const host = document.createElement("div");
-    host.style.cssText = "position:fixed;z-index:2147483647;bottom:20px;right:20px;";
+    host.style.cssText = "position:fixed;z-index:2147483647;bottom:70px;left:20px;";
     const shadow = host.attachShadow({ mode: "open" });
     const box = document.createElement("div");
     box.textContent = text;
     box.style.cssText =
-      "font:14px/1.5 system-ui,sans-serif;background:#2C1608;color:#F7F4EF;" +
-      "padding:12px 16px;border-radius:10px;max-width:380px;direction:rtl;" +
-      "box-shadow:0 4px 16px rgba(0,0,0,.3);white-space:pre-wrap;";
+      "font:14px/1.5 system-ui,sans-serif;background:#1b8a5a;color:#fff;padding:12px 16px;" +
+      "border-radius:10px;max-width:380px;direction:rtl;box-shadow:0 4px 16px rgba(0,0,0,.3);white-space:pre-wrap;";
     shadow.appendChild(box);
     document.body.appendChild(host);
-    setTimeout(() => host.remove(), 6000);
+    setTimeout(() => host.remove(), ms || 5000);
   }
 
   // eslint-disable-next-line no-console
