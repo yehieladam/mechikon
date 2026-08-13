@@ -11,6 +11,7 @@
 import type { Span } from "@engine/types";
 import { RedactSession } from "./session";
 import {
+  closestEditable,
   currentSelection,
   focusedComposer,
   getText,
@@ -91,6 +92,13 @@ function mountUi() {
     }
     .cta:hover { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(0,0,0,.26), inset 0 1px 0 rgba(255,255,255,.3); }
     .cta:active { transform: translateY(0) scale(.97); }
+    /* secondary (restore): light glass, ink text */
+    .cta.ghost {
+      background: rgba(255,255,255,.5); color: var(--ink); border: .5px solid var(--hairline);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.7), 0 1px 2px rgba(0,0,0,.06);
+    }
+    .cta.ghost:hover { background: rgba(255,255,255,.72); box-shadow: inset 0 1px 0 rgba(255,255,255,.8), 0 4px 12px rgba(0,0,0,.1); }
+    .actions { display: flex; align-items: center; gap: 8px; }
 
     .pop { display: none; transform: translate(-50%, -100%); animation: rise .2s var(--ease); }
     .pop .cta { height: 38px; padding: 0 16px; font-size: 13px; white-space: nowrap; }
@@ -124,12 +132,20 @@ function mountUi() {
   const chipLabel = document.createElement("span");
   chipLabel.className = "label";
   info.append(brand, chipLabel);
+  const actions = document.createElement("div");
+  actions.className = "actions";
   const chipBtn = document.createElement("button");
   chipBtn.className = "cta";
   chipBtn.textContent = "הסתר";
   keepFocus(chipBtn);
   chipBtn.addEventListener("click", redactAll);
-  chip.append(dot, info, chipBtn);
+  const restoreBtn = document.createElement("button");
+  restoreBtn.className = "cta ghost";
+  restoreBtn.textContent = "שחזר";
+  keepFocus(restoreBtn);
+  restoreBtn.addEventListener("click", restoreVisible);
+  actions.append(chipBtn, restoreBtn);
+  chip.append(dot, info, actions);
 
   const pop = document.createElement("div");
   pop.className = "pop";
@@ -144,7 +160,7 @@ function mountUi() {
   shadow.append(style, chip, pop, toast);
   document.documentElement.appendChild(host);
 
-  return { chipLabel, chip, dot, chipBtn, pop, popBtn, toast };
+  return { chipLabel, chip, dot, chipBtn, restoreBtn, pop, popBtn, toast };
 }
 
 /** Stop a UI button from stealing focus / clearing the page selection when pressed. */
@@ -158,24 +174,65 @@ function showToast(text: string) {
   window.setTimeout(() => (ui.toast.style.display = "none"), 4000);
 }
 
-/** Sensitive values found but not yet redacted: orange dot + count + the redact button. */
+/** Sensitive values found but not yet redacted: orange dot + count + הסתר (and שחזר if a key exists). */
 function setChipDetected(count: number) {
   ui.dot.classList.remove("green");
   ui.chipLabel.textContent = `${count} פרטים רגישים`;
   ui.chipBtn.style.display = "";
+  ui.restoreBtn.style.display = session.hasKey ? "" : "none";
   ui.chip.style.display = "flex";
 }
 
-/** Everything redacted: green dot, "protected", no button (nothing left to hide). */
+/** Everything redacted: green dot, "protected", only שחזר (nothing left to hide). */
 function setChipProtected(count: number) {
   ui.dot.classList.add("green");
   ui.chipLabel.textContent = count > 0 ? `מוגן · ${count} הוסתרו` : "מוגן";
   ui.chipBtn.style.display = "none";
+  ui.restoreBtn.style.display = "";
   ui.chip.style.display = "flex";
 }
 
 function hideChip() {
   ui.chip.style.display = "none";
+}
+
+/** Restore every placeholder token visible on the page (the AI's answer) back to its real value,
+ *  in place. Skips the composer and script/style. Robust across sites (no per-site selectors). */
+function restoreVisible() {
+  if (!session.hasKey) {
+    showToast("אין מפתח שחזור עדיין — קודם הסתר פרטים");
+    return;
+  }
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      const parent = node.parentElement;
+      if (!parent) {
+        return NodeFilter.FILTER_REJECT;
+      }
+      const tag = parent.tagName;
+      if (tag === "SCRIPT" || tag === "STYLE" || tag === "NOSCRIPT" || closestEditable(parent)) {
+        return NodeFilter.FILTER_REJECT;
+      }
+      return node.nodeValue && node.nodeValue.indexOf("[") !== -1
+        ? NodeFilter.FILTER_ACCEPT
+        : NodeFilter.FILTER_SKIP;
+    },
+  });
+  const nodes: Text[] = [];
+  let node: Node | null;
+  while ((node = walker.nextNode())) {
+    nodes.push(node as Text);
+  }
+  let changed = 0;
+  for (const textNode of nodes) {
+    const original = textNode.nodeValue ?? "";
+    const { text } = session.restore(original);
+    if (text !== original) {
+      textNode.nodeValue = text;
+      changed += 1;
+    }
+  }
+  showToast(changed > 0 ? `שוחזר ב-${changed} מקומות` : "לא נמצאו טוקנים לשחזור בעמוד");
 }
 
 // ---- auto-detect: watch the composer -------------------------------------------------
@@ -200,13 +257,22 @@ document.addEventListener(
 function updateChip() {
   const composer = focusedComposer() ?? lastComposer;
   if (!composer) {
-    ui.chip.style.display = "none";
+    // Keep the chip (with שחזר) available once a key exists, even when the composer isn't focused.
+    if (session.hasKey) {
+      setChipProtected(0);
+    } else {
+      hideChip();
+    }
     return;
   }
   const text = getText(composer);
   const distinct = new Set(session.detect(text).map((s) => text.slice(s.start, s.end)));
   if (distinct.size === 0) {
-    hideChip();
+    if (session.hasKey) {
+      setChipProtected(0);
+    } else {
+      hideChip();
+    }
     return;
   }
   setChipDetected(distinct.size);
@@ -229,7 +295,11 @@ async function redactAll() {
       : redacted + INSTRUCTION;
   setWholeText(composer, withInstruction);
   setChipProtected(newRows.length);
-  showToast(newRows.length > 0 ? `הוסתרו ${newRows.length} פרטים` : "לא נמצאו פרטים חדשים להסתרה");
+  showToast(
+    newRows.length > 0
+      ? `הוסתרו ${newRows.length} פרטים · נוספה הנחיה ל-AI לשמור על האסימונים`
+      : "לא נמצאו פרטים חדשים להסתרה",
+  );
 }
 
 /** Ask the offscreen NER model (via the SW) for name/org/location spans; empty on timeout/not-ready. */
@@ -289,8 +359,9 @@ function refreshPopover() {
   ui.pop.style.display = "block";
 }
 
-// Restore the key from storage (survives reload within the 24h window) before the user acts.
-void session.hydrate();
+// Restore the key from storage (survives reload within the 24h window); then show the chip's שחזר
+// affordance if a key from earlier today is still around.
+void session.hydrate().then(() => updateChip());
 
 // eslint-disable-next-line no-console
 console.log("[mechikon] inline content script ready on", location.host);
