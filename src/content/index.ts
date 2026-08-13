@@ -307,11 +307,12 @@ async function redactAll() {
       : redacted + INSTRUCTION;
   setWholeText(composer, withInstruction);
   setChipProtected(newRows.length);
-  showToast(
-    newRows.length > 0
-      ? `הוסתרו ${newRows.length} פרטים · נוספה הנחיה ל-AI לשמור על האסימונים`
-      : "לא נמצאו פרטים חדשים להסתרה",
-  );
+  if (newRows.length > 0) {
+    const pending = nerReady ? "" : " · שמות וארגונים יזוהו לאחר שמנוע ה-AI ייטען";
+    showToast(`הוסתרו ${newRows.length} פרטים · נוספה הנחיה ל-AI${pending}`);
+  } else {
+    showToast("לא נמצאו פרטים חדשים להסתרה");
+  }
 }
 
 /** Ask the offscreen NER model (via the SW) for name/org/location spans; empty on timeout/not-ready. */
@@ -370,6 +371,16 @@ function refreshPopover() {
   ui.pop.style.top = `${ctx.rect.top - 6}px`;
   ui.pop.style.display = "block";
 }
+
+// The offscreen NER model announces readiness (relayed via the SW). Until then, names/orgs aren't
+// caught automatically — let the user know so it's not mistaken for a miss.
+let nerReady = false;
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg?.type === "ner:ready" && !nerReady) {
+    nerReady = true;
+    showToast("מנוע זיהוי השמות מוכן — הסתירו שוב לזיהוי שמות, ארגונים ומקומות");
+  }
+});
 
 // Restore the key from storage (survives reload within the 24h window); then show the chip's שחזר
 // affordance if a key from earlier today is still around.
