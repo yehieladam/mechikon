@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "mechikon spike — editor replace",
+  "version": "0.0.1",
+  "description": "Phase-0 spike: does in-place selection replacement survive the ChatGPT/Claude/Gemini editors?",
+  "permissions": ["contextMenus"],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*",
+        "https://claude.ai/*",
+        "https://gemini.google.com/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
