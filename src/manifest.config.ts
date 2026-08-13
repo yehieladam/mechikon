@@ -18,6 +18,14 @@ export default defineManifest({
     default_popup: "src/popup/index.html",
   },
   permissions: ["storage", "offscreen"],
+  // Lets the extension fetch the NER model cross-origin from HF without CORS ("Failed to fetch"):
+  // connect-src in the CSP allows the request, but host_permissions is what bypasses CORS. Weights
+  // redirect to the regional *.hf.co Xet CDN, so both hosts are listed. No user data is ever sent.
+  host_permissions: [
+    "https://huggingface.co/*",
+    "https://*.huggingface.co/*",
+    "https://*.hf.co/*",
+  ],
   background: {
     service_worker: "src/background/index.ts",
     type: "module",
