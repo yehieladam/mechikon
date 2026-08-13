@@ -14,9 +14,13 @@ export default defineConfig({
       "@engine": fileURLToPath(new URL("./engine/src", import.meta.url)),
     },
   },
+  // mupdf ships as an ESM module with top-level await and loads its own wasm via new URL(); excluding
+  // it from pre-bundling + targeting es2022 lets the popup's PDF text extraction work (mirrors web).
+  optimizeDeps: { exclude: ["mupdf"] },
   build: {
     outDir: "dist",
     emptyOutDir: true,
+    target: "es2022",
     rollupOptions: {
       // Extra HTML entry not referenced by the manifest (the offscreen document is created at
       // runtime via chrome.offscreen.createDocument, not declared as an action/page).
