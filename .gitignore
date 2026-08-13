@@ -42,3 +42,6 @@ web/public/vendor/
 scripts/*.jsonl
 scripts/*.log
 scripts/ocr-calibration*.json
+
+# Claude Code local session data
+.claude/
