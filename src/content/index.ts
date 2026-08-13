@@ -23,11 +23,14 @@ import {
 const session = new RedactSession();
 let lastComposer: Composer | null = null;
 
-// Single line, no leading newline (ProseMirror/Lexical can drop text after a \n in an execCommand
-// insert) and no placeholder-shaped examples (restore would otherwise rewrite them inside this note).
+// Reassure the model the text is ALREADY anonymized (no real PII) so it answers normally instead of
+// refusing to "process sensitive data" — the earlier "masks for sensitive info" wording triggered a
+// refusal. No word like PII/"sensitive"; the example is the digit-free pattern [סוג_מספר], which the
+// restore matcher (needs [..._<digits>]) never touches, so it isn't rewritten inside this note.
+// Single line: ProseMirror/Lexical can drop text after a \n in an execCommand insert.
 const INSTRUCTION =
-  "  הערה חשובה: בטקסט יש אסימונים בסוגריים מרובעים שמחליפים מידע רגיש. אנא השאר כל אסימון בדיוק כפי שהוא בתשובתך, ללא שינוי, כדי שנוכל לשחזר את המידע המקורי.";
-const INSTRUCTION_MARKER = "הערה חשובה: בטקסט יש אסימונים";
+  "  שים לב: הטקסט שלמעלה עבר אנונימיזציה ואינו מכיל מידע אישי אמיתי. הסימונים בסוגריים מרובעים (בתבנית [סוג_מספר], למשל שם או מספר) הם תחליפים אנונימיים — התייחס אליהם כאל ערכים רגילים, ענה על הבקשה כרגיל, והשאר כל סימון בתשובתך בדיוק כפי שהוא כדי שנוכל לשחזר.";
+const INSTRUCTION_MARKER = "הטקסט שלמעלה עבר אנונימיזציה";
 
 // ---- UI (shadow DOM, immune to host page CSS) ---------------------------------------
 const ui = mountUi();
