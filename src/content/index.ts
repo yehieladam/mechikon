@@ -34,42 +34,77 @@ function mountUi() {
   host.id = "mechikon-root";
   const shadow = host.attachShadow({ mode: "open" });
 
+  // Design language mirrors the mechikon site: Apple system font, white translucent glass
+  // (backdrop blur), near-black ink (#0a0a0a), emerald action, yellow detection accent, pill buttons.
   const style = document.createElement("style");
   style.textContent = `
-    .chip, .pop button, .toast {
-      font: 14px/1.2 system-ui, sans-serif; direction: rtl; box-sizing: border-box;
+    :host {
+      --ink: #0a0a0a;
+      --emerald: #10b981;
+      --emerald-press: #059669;
+      --accent: #facc15;
+      --glass: rgba(255,255,255,.72);
+      --hairline: rgba(0,0,0,.08);
+      --shadow: 0 8px 30px rgba(0,0,0,.12), 0 1px 2px rgba(0,0,0,.06);
+      --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
     }
+    .chip, .pop, .toast { position: fixed; z-index: 2147483647; direction: rtl; font-family: var(--font); }
+    button { font-family: var(--font); cursor: pointer; border: 0; }
+
     .chip {
-      position: fixed; bottom: 20px; inset-inline-start: 20px; z-index: 2147483647;
-      display: none; align-items: center; gap: 10px; background: #2C1608; color: #F7F4EF;
-      padding: 10px 14px; border-radius: 12px; box-shadow: 0 4px 16px rgba(0,0,0,.3);
+      bottom: 22px; inset-inline-start: 22px; display: none; align-items: center; gap: 12px;
+      background: var(--glass); -webkit-backdrop-filter: blur(20px) saturate(180%);
+      backdrop-filter: blur(20px) saturate(180%); color: var(--ink);
+      padding: 10px 12px 10px 16px; border-radius: 16px; border: .5px solid var(--hairline);
+      box-shadow: var(--shadow); animation: pop .28s cubic-bezier(.2,.8,.2,1);
     }
+    .chip .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent);
+      box-shadow: 0 0 0 4px rgba(250,204,21,.22); flex: 0 0 auto; }
+    .chip .txt { display: flex; flex-direction: column; line-height: 1.25; }
+    .chip .brand { font-size: 11px; font-weight: 600; letter-spacing: .01em; color: rgba(10,10,10,.5); }
+    .chip .label { font-size: 14px; font-weight: 500; }
     .chip button {
-      font: 600 14px/1 system-ui; background: #1b8a5a; color: #fff; border: 0;
-      padding: 10px 14px; min-height: 40px; border-radius: 8px; cursor: pointer;
+      background: var(--emerald); color: #fff; font-size: 14px; font-weight: 600;
+      padding: 0 18px; height: 44px; border-radius: 999px; transition: background .15s, transform .1s;
     }
-    .pop {
-      position: fixed; z-index: 2147483647; display: none; transform: translate(-50%, -100%);
-    }
+    .chip button:hover { background: var(--emerald-press); }
+    .chip button:active { transform: scale(.97); }
+
+    .pop { display: none; transform: translate(-50%, -100%); animation: pop .18s cubic-bezier(.2,.8,.2,1); }
     .pop button {
-      background: #2C1608; color: #fff; border: 0; padding: 8px 12px; min-height: 40px;
-      border-radius: 8px; cursor: pointer; box-shadow: 0 4px 16px rgba(0,0,0,.3); white-space: nowrap;
+      background: var(--ink); color: #fff; font-size: 13px; font-weight: 600; white-space: nowrap;
+      padding: 0 16px; height: 40px; border-radius: 999px; box-shadow: var(--shadow);
     }
+    .pop button:active { transform: scale(.96); }
+
     .toast {
-      position: fixed; bottom: 74px; inset-inline-start: 20px; z-index: 2147483647;
-      background: #1b8a5a; color: #fff; padding: 12px 16px; border-radius: 10px;
-      max-width: 380px; box-shadow: 0 4px 16px rgba(0,0,0,.3); white-space: pre-wrap; display: none;
+      bottom: 80px; inset-inline-start: 22px; display: none; max-width: 380px;
+      background: var(--glass); -webkit-backdrop-filter: blur(20px) saturate(180%);
+      backdrop-filter: blur(20px) saturate(180%); color: var(--ink); font-size: 14px; font-weight: 500;
+      padding: 12px 16px; border-radius: 14px; border: .5px solid var(--hairline);
+      box-shadow: var(--shadow); white-space: pre-wrap; animation: pop .28s cubic-bezier(.2,.8,.2,1);
     }
+    @keyframes pop { from { opacity: 0; transform: translateY(6px) scale(.98); } }
+    @media (prefers-reduced-motion: reduce) { .chip, .pop, .toast { animation: none !important; } }
   `;
 
   const chip = document.createElement("div");
   chip.className = "chip";
+  const dot = document.createElement("span");
+  dot.className = "dot";
+  const txt = document.createElement("span");
+  txt.className = "txt";
+  const brand = document.createElement("span");
+  brand.className = "brand";
+  brand.textContent = "מחיקון";
   const chipLabel = document.createElement("span");
+  chipLabel.className = "label";
+  txt.append(brand, chipLabel);
   const chipBtn = document.createElement("button");
   chipBtn.textContent = "הסתר";
   keepFocus(chipBtn);
   chipBtn.addEventListener("click", redactAll);
-  chip.append(chipLabel, chipBtn);
+  chip.append(dot, txt, chipBtn);
 
   const pop = document.createElement("div");
   pop.className = "pop";
@@ -182,6 +217,9 @@ function refreshPopover() {
   ui.pop.style.top = `${ctx.rect.top - 6}px`;
   ui.pop.style.display = "block";
 }
+
+// Restore the key from storage (survives reload within the 24h window) before the user acts.
+void session.hydrate();
 
 // eslint-disable-next-line no-console
 console.log("[mechikon] inline content script ready on", location.host);

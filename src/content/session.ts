@@ -10,10 +10,16 @@ import type { KeyRow, Span } from "@engine/types";
 import { anonymizeWith, detectDeterministic } from "@engine/pipeline";
 import { manualSpans } from "@engine/manual";
 import { restore } from "@engine/restore";
+import { clearKey, loadKey, saveKey } from "./keyStore";
 
 export class RedactSession {
-  private readonly key: KeyRow[] = [];
+  private key: KeyRow[] = [];
   private readonly manualTerms: string[] = [];
+
+  /** Hydrate the key from storage (survives reload within the 24h window). Call once on startup. */
+  async hydrate(): Promise<void> {
+    this.key = await loadKey();
+  }
 
   /** Distinct sensitive values the deterministic engine sees in `text` right now (for the live indicator). */
   detect(text: string): Span[] {
@@ -39,7 +45,17 @@ export class RedactSession {
     const known = new Set(this.key.map((row) => row.placeholder));
     const newRows = result.key.filter((row) => !known.has(row.placeholder));
     this.key.push(...newRows);
+    if (newRows.length > 0) {
+      void saveKey(this.key); // persist with a refreshed 24h expiry (fire-and-forget)
+    }
     return { text: result.anonymizedText, newRows };
+  }
+
+  /** Forget everything (key + storage). */
+  async clear(): Promise<void> {
+    this.key = [];
+    this.manualTerms.length = 0;
+    await clearKey();
   }
 
   /** Put original values back into an AI answer using the accumulated key. Tolerant to LLM token mangling. */

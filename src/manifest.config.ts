@@ -17,6 +17,7 @@ export default defineManifest({
   action: {
     default_popup: "src/popup/index.html",
   },
+  permissions: ["storage"],
   // Inline redaction inside AI chat composers. Fixed host list (Store trust) — never <all_urls>.
   // The deterministic engine is pure JS and runs in the content script's isolated world; no host
   // permissions needed beyond these matches, and no model (NER is added later via an offscreen doc).
