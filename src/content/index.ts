@@ -46,7 +46,7 @@ function mountUi() {
       --ink: #0a0a0a;
       --orange: #ff9500;   /* detected  */
       --green: #34c759;    /* protected */
-      --glass-card: rgba(255,255,255,.62);
+      --glass-card: rgba(255,255,255,.4);
       --glass-btn: rgba(12,12,12,.84);
       --hairline: rgba(0,0,0,.10);
       --shadow: 0 1px 2px rgba(0,0,0,.06), 0 14px 36px -10px rgba(0,0,0,.26);
@@ -59,8 +59,8 @@ function mountUi() {
 
     .chip {
       bottom: 24px; inset-inline-start: 24px; display: none; align-items: center; gap: 13px;
-      background: var(--glass-card); -webkit-backdrop-filter: blur(28px) saturate(200%);
-      backdrop-filter: blur(28px) saturate(200%); border: .5px solid var(--hairline);
+      background: var(--glass-card); -webkit-backdrop-filter: blur(34px) saturate(200%);
+      backdrop-filter: blur(34px) saturate(200%); border: .5px solid var(--hairline);
       border-radius: 20px; padding: 11px 12px 11px 18px; box-shadow: var(--shadow);
       animation: rise .34s var(--ease);
     }
@@ -84,21 +84,32 @@ function mountUi() {
       font-variant-numeric: tabular-nums; }
 
     .cta {
-      position: relative; background: var(--glass-btn); color: #fff;
-      -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
-      border: .5px solid rgba(255,255,255,.18); font-size: 14px; font-weight: 600; letter-spacing: -.01em;
-      height: 42px; padding: 0 20px; border-radius: 999px;
-      box-shadow: 0 1px 2px rgba(0,0,0,.28), inset 0 1px 0 rgba(255,255,255,.22);
-      transition: transform .12s var(--ease), box-shadow .2s var(--ease);
+      position: relative; color: #fff; font-size: 13.5px; font-weight: 600; letter-spacing: -.006em;
+      height: 40px; padding: 0 18px; border-radius: 999px; overflow: hidden;
+      background: linear-gradient(180deg, rgba(46,46,52,.94), rgba(8,8,10,.96));
+      -webkit-backdrop-filter: blur(14px) saturate(180%); backdrop-filter: blur(14px) saturate(180%);
+      border: .5px solid rgba(255,255,255,.16);
+      box-shadow: 0 2px 8px rgba(0,0,0,.28), inset 0 1px 0 rgba(255,255,255,.2), inset 0 -1px 0 rgba(0,0,0,.3);
+      transition: transform .14s var(--ease), box-shadow .22s var(--ease), filter .22s var(--ease);
     }
-    .cta:hover { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(0,0,0,.26), inset 0 1px 0 rgba(255,255,255,.3); }
-    .cta:active { transform: translateY(0) scale(.97); }
-    /* secondary (restore): light glass, ink text */
+    /* top light sweep for a glassy, modern surface */
+    .cta::after {
+      content: ""; position: absolute; inset: 0 0 auto 0; height: 50%; pointer-events: none;
+      background: linear-gradient(180deg, rgba(255,255,255,.16), rgba(255,255,255,0));
+    }
+    .cta:hover { transform: translateY(-1px); filter: brightness(1.12);
+      box-shadow: 0 8px 20px rgba(0,0,0,.3), inset 0 1px 0 rgba(255,255,255,.26); }
+    .cta:active { transform: translateY(0) scale(.96); filter: brightness(.98); }
+    .cta:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+    /* secondary (restore): light frosted glass, ink text */
     .cta.ghost {
-      background: rgba(255,255,255,.5); color: var(--ink); border: .5px solid var(--hairline);
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.7), 0 1px 2px rgba(0,0,0,.06);
+      color: var(--ink); background: linear-gradient(180deg, rgba(255,255,255,.72), rgba(255,255,255,.4));
+      border: .5px solid var(--hairline);
+      box-shadow: 0 2px 8px rgba(0,0,0,.06), inset 0 1px 0 rgba(255,255,255,.85);
     }
-    .cta.ghost:hover { background: rgba(255,255,255,.72); box-shadow: inset 0 1px 0 rgba(255,255,255,.8), 0 4px 12px rgba(0,0,0,.1); }
+    .cta.ghost::after { background: linear-gradient(180deg, rgba(255,255,255,.5), rgba(255,255,255,0)); }
+    .cta.ghost:hover { filter: brightness(1.03);
+      box-shadow: 0 8px 18px rgba(0,0,0,.1), inset 0 1px 0 rgba(255,255,255,.95); }
     .actions { display: flex; align-items: center; gap: 8px; }
 
     .pop { display: none; transform: translate(-50%, -100%); animation: rise .2s var(--ease); }
@@ -106,8 +117,8 @@ function mountUi() {
 
     .toast {
       bottom: 90px; inset-inline-start: 24px; display: none; align-items: center; gap: 10px; max-width: 360px;
-      background: var(--glass-card); -webkit-backdrop-filter: blur(28px) saturate(200%);
-      backdrop-filter: blur(28px) saturate(200%); border: .5px solid var(--hairline);
+      background: var(--glass-card); -webkit-backdrop-filter: blur(34px) saturate(200%);
+      backdrop-filter: blur(34px) saturate(200%); border: .5px solid var(--hairline);
       border-radius: 14px; padding: 12px 16px; box-shadow: var(--shadow);
       color: var(--ink); font-size: 14px; font-weight: 500; animation: rise .34s var(--ease);
     }
