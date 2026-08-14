@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="/logo.png" />
+    <meta
+      name="description"
+      content="מחיקון לכרום — גישה מוקדמת. השחרת פרטים מזהים ישירות בתוך ChatGPT ו-Claude."
+    />
+    <title>מחיקון לכרום — גישה מוקדמת</title>
+    <style>
+      /* Self-contained + CSP-clean (style-src 'self' 'unsafe-inline'; no external fonts/scripts).
+         System font stack matches the app (index.css) and renders Hebrew cleanly with no download. */
+      :root {
+        color-scheme: light;
+        --ink: #0a0a0a;
+        --zinc-600: #52525b;
+        --zinc-500: #71717a;
+        --zinc-300: #d4d4d8;
+        --zinc-200: #e4e4e7;
+        --zinc-100: #f4f4f5;
+        --zinc-50: #fafafa;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+      }
+      body {
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+        -webkit-font-smoothing: antialiased;
+        background: #ffffff;
+        color: var(--ink);
+        line-height: 1.7;
+      }
+      .wrap {
+        max-width: 620px;
+        margin: 0 auto;
+        padding: 40px 20px 80px;
+      }
+      .back {
+        display: inline-flex;
+        align-items: center;
+        min-height: 44px;
+        color: var(--zinc-600);
+        text-decoration: none;
+        font-size: 14px;
+      }
+      .back:hover {
+        color: var(--ink);
+      }
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        border: 1px solid var(--zinc-300);
+        background: #fff;
+        border-radius: 999px;
+        padding: 4px 12px;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--zinc-600);
+      }
+      h1 {
+        font-size: 28px;
+        line-height: 1.25;
+        margin: 16px 0 8px;
+      }
+      .sub {
+        color: var(--zinc-600);
+        margin: 0 0 24px;
+      }
+      .demo {
+        width: 100%;
+        border-radius: 20px;
+        border: 1px solid var(--zinc-200);
+        background: var(--zinc-100);
+        display: block;
+        margin: 0 0 28px;
+      }
+      form {
+        display: grid;
+        gap: 12px;
+      }
+      label {
+        font-size: 14px;
+        font-weight: 600;
+        margin-bottom: -4px;
+      }
+      input {
+        width: 100%;
+        min-height: 48px;
+        padding: 0 14px;
+        border: 1px solid var(--zinc-300);
+        border-radius: 12px;
+        font-size: 16px;
+        font-family: inherit;
+        background: #fff;
+        color: var(--ink);
+      }
+      input:focus {
+        outline: 2px solid var(--ink);
+        outline-offset: 1px;
+      }
+      button {
+        min-height: 48px;
+        border: none;
+        border-radius: 999px;
+        background: var(--ink);
+        color: #fff;
+        font-size: 16px;
+        font-weight: 700;
+        font-family: inherit;
+        cursor: pointer;
+        transition: opacity 0.15s;
+      }
+      button:hover {
+        opacity: 0.9;
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+      .consent {
+        font-size: 12px;
+        color: var(--zinc-500);
+        line-height: 1.5;
+      }
+      .consent a {
+        color: var(--ink);
+      }
+      .err {
+        color: #b91c1c;
+        font-size: 14px;
+        min-height: 20px;
+      }
+      /* Success / status view */
+      .status {
+        display: none;
+        text-align: center;
+      }
+      .status.show {
+        display: block;
+      }
+      form.hide {
+        display: none;
+      }
+      .check {
+        font-size: 40px;
+      }
+      .tier {
+        display: inline-flex;
+        align-items: center;
+        border-radius: 999px;
+        background: var(--zinc-100);
+        border: 1px solid var(--zinc-200);
+        padding: 6px 16px;
+        font-weight: 700;
+        margin: 4px 0 8px;
+      }
+      .count {
+        color: var(--zinc-600);
+        font-size: 14px;
+      }
+      .count b {
+        color: var(--ink);
+        font-size: 18px;
+      }
+      .sharebox {
+        display: flex;
+        gap: 8px;
+        margin: 20px 0 8px;
+      }
+      .sharebox input {
+        font-size: 13px;
+        direction: ltr;
+        text-align: left;
+      }
+      .sharebox button {
+        flex: 0 0 auto;
+        padding: 0 18px;
+        min-width: 96px;
+      }
+      .hint {
+        color: var(--zinc-500);
+        font-size: 13px;
+      }
+      .trust {
+        margin-top: 28px;
+        padding-top: 20px;
+        border-top: 1px solid var(--zinc-200);
+        color: var(--zinc-500);
+        font-size: 12px;
+        line-height: 1.6;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <a class="back" href="/">← חזרה למחיקון</a>
+
+      <div style="margin-top: 20px">
+        <span class="badge">בקרוב · תוסף לכרום</span>
+      </div>
+      <h1>מחיקון גם בתוך ChatGPT ו-Claude</h1>
+      <p class="sub">
+        התוסף משחיר פרטים מזהים ישירות בתיבת הצ'אט, לפני ששולחים. הצטרפו לגישה המוקדמת —
+        שתפו כדי לקדם את מקומכם בתור.
+      </p>
+
+      <!-- Swap /demo.mp4 for a dedicated extension demo when ready. -->
+      <video
+        class="demo"
+        src="/demo.mp4"
+        muted
+        loop
+        autoplay
+        playsinline
+        controls
+        aria-label="הדגמה של תוסף מחיקון"
+      ></video>
+
+      <!-- Signup form -->
+      <form id="form" novalidate>
+        <div>
+          <label for="name">שם</label>
+          <input id="name" name="name" type="text" autocomplete="name" required />
+        </div>
+        <div>
+          <label for="email">אימייל</label>
+          <input id="email" name="email" type="email" autocomplete="email" required />
+        </div>
+        <div>
+          <label for="profession">תחום / מקצוע</label>
+          <input
+            id="profession"
+            name="profession"
+            type="text"
+            placeholder="עו״ד, רו״ח, מנהל/ת מוצר…"
+          />
+        </div>
+        <button id="submit" type="submit">להצטרף לגישה מוקדמת</button>
+        <p class="err" id="err" role="alert" aria-live="polite"></p>
+        <p class="consent">
+          בהרשמה אתם מאשרים שנשמור את שמכם ואימיילכם כדי לעדכן אתכם על השקת התוסף.
+          המסמכים שאתם משחירים במחיקון לעולם לא עוזבים את הדפדפן — רק פרטי ההרשמה שבחרתם
+          לשלוח נשמרים אצלנו. פרטים ב<a href="/terms.html">תנאי השימוש</a>.
+        </p>
+      </form>
+
+      <!-- Status view (after signup) -->
+      <div class="status" id="status" aria-live="polite">
+        <div class="check">✓</div>
+        <div class="tier" id="tier">נרשמת</div>
+        <p class="count"><b id="count">0</b> חברים הצטרפו דרכך</p>
+        <p class="hint" id="hint">שתפו את הלינק האישי שלכם כדי לקדם את מקומכם בתור.</p>
+        <div class="sharebox">
+          <input id="link" type="text" readonly />
+          <button id="copy" type="button">העתקה</button>
+        </div>
+        <p class="hint" id="share-native" style="display: none">
+          <button
+            id="share"
+            type="button"
+            style="background: #fff; color: var(--ink); border: 1px solid var(--zinc-300); width: 100%; margin-top: 8px"
+          >
+            שיתוף
+          </button>
+        </p>
+      </div>
+
+      <p class="trust">
+        מחיקון הוא כלי חינמי מבית BAI Solutions. השחרת המסמכים רצה כולה בדפדפן שלכם ואינה
+        עוברת בשום שרת. רשימת הגישה המוקדמת נשמרת בנפרד ומשמשת אך ורק לעדכון על השקת התוסף.
+      </p>
+    </div>
+
+    <script type="module" src="/src/waitlist/main.ts"></script>
+  </body>
+</html>

@@ -2603,6 +2603,24 @@ export function App() {
         </section>
       </main>
 
+      {/* Early-access teaser for the Chrome extension. Links to the standalone /waitlist.html
+          page (its own relaxed CSP allows the Supabase signup call; this app stays locked). */}
+      <section className="mx-auto mt-24 max-w-2xl px-6">
+        <div className="rounded-3xl border border-zinc-200 bg-zinc-50 px-6 py-10 text-center">
+          <span className="inline-flex items-center rounded-full border border-zinc-300 bg-white px-3 py-1 text-xs font-semibold text-zinc-600">
+            {t("waitlist.badge")}
+          </span>
+          <h2 className="mt-4 text-2xl font-semibold text-ink">{t("waitlist.title")}</h2>
+          <p className="mx-auto mt-3 max-w-md text-zinc-600">{t("waitlist.desc")}</p>
+          <a
+            href="/waitlist.html"
+            className="mt-6 inline-flex min-h-[44px] items-center justify-center rounded-full bg-ink px-6 py-3 font-semibold text-white transition hover:opacity-90"
+          >
+            {t("waitlist.cta")}
+          </a>
+        </div>
+      </section>
+
       <footer className="mx-auto mt-24 max-w-2xl px-6 pb-16 text-center text-xs leading-relaxed text-zinc-500">
         <p className="text-sm text-zinc-600">
           {t("contact.lawyersCta")}{" "}
