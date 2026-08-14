@@ -44,6 +44,105 @@ function friendlyError(message: string, fileName: string): string {
   return "שגיאה בעיבוד הקובץ";
 }
 
+/** Read-only text with a floating copy icon in the corner (like every AI chat), so copying never
+ *  needs scrolling to a button below the box. */
+function CopyableText({ value, tone = "plain" }: { value: string; tone?: "plain" | "ok" }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard blocked — user can still select manually */
+    }
+  };
+  const border = tone === "ok" ? "border-emerald-200 bg-emerald-50/50" : "border-zinc-200 bg-zinc-50";
+  return (
+    <div className="relative">
+      <textarea
+        readOnly
+        dir="auto"
+        value={value}
+        className={`h-40 w-full resize-none rounded-3xl border ${border} p-4 pt-10 text-[13px] leading-relaxed`}
+      />
+      <button
+        type="button"
+        onClick={copy}
+        aria-label="העתק"
+        className="absolute left-2.5 top-2.5 flex h-9 w-9 items-center justify-center rounded-full border border-zinc-200 bg-white/90 text-zinc-600 shadow-sm transition hover:text-ink"
+      >
+        {copied ? (
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4">
+            <path d="M20 6 9 17l-5-5" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        ) : (
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <rect x="9" y="9" width="11" height="11" rx="2.5" />
+            <path d="M5 15V5a2 2 0 0 1 2-2h10" strokeLinecap="round" />
+          </svg>
+        )}
+      </button>
+    </div>
+  );
+}
+
+const IS_WORD = /[\p{L}\p{N}]/u;
+
+function splitToken(token: string): { lead: string; core: string; trail: string } {
+  let s = 0;
+  let e = token.length;
+  while (s < e && !IS_WORD.test(token[s])) s += 1;
+  while (e > s && !IS_WORD.test(token[e - 1])) e -= 1;
+  return { lead: token.slice(0, s), core: token.slice(s, e), trail: token.slice(e) };
+}
+
+/** The extracted text rendered as clickable word/number units — click a value to mask it (and every
+ *  repeat of it), click again to unmask. No manual copy needed. */
+function ClickablePreview({
+  text,
+  terms,
+  onToggle,
+}: {
+  text: string;
+  terms: string[];
+  onToggle: (word: string) => void;
+}) {
+  const parts = text.split(/(\s+)/);
+  return (
+    <div
+      dir="auto"
+      className="h-32 overflow-auto whitespace-pre-wrap rounded-3xl border border-zinc-200 bg-zinc-50 p-4 text-[13px] leading-relaxed"
+    >
+      {parts.map((part, i) => {
+        if (part === "" || /^\s+$/.test(part)) {
+          return <span key={i}>{part}</span>;
+        }
+        const { lead, core, trail } = splitToken(part);
+        if (core === "") {
+          return <span key={i}>{part}</span>;
+        }
+        const active = terms.includes(core);
+        return (
+          <span key={i}>
+            {lead}
+            <button
+              type="button"
+              onClick={() => onToggle(core)}
+              className={`rounded-md px-0.5 transition ${
+                active ? "bg-emerald-200 font-semibold text-emerald-900" : "hover:bg-amber-100"
+              }`}
+            >
+              {core}
+            </button>
+            {trail}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 export function App() {
   const [status, setStatus] = useState<Status>("idle");
   const [result, setResult] = useState<Result | null>(null);
@@ -65,7 +164,6 @@ export function App() {
   const [sessionReady, setSessionReady] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const keyInputRef = useRef<HTMLInputElement>(null);
-  const previewRef = useRef<HTMLTextAreaElement>(null);
 
   // The popup shares the ONE session key with the chat overlay (same chrome.storage). Hydrate it so
   // restore is ready automatically and file tokens stay consistent with chat tokens.
@@ -88,12 +186,9 @@ export function App() {
     setTermInput("");
   }, []);
 
-  const addSelection = useCallback(() => {
-    const el = previewRef.current;
-    if (el && el.selectionStart !== el.selectionEnd) {
-      addTerm(el.value.slice(el.selectionStart, el.selectionEnd));
-    }
-  }, [addTerm]);
+  const toggleTerm = useCallback((word: string) => {
+    setTerms((prev) => (prev.includes(word) ? prev.filter((w) => w !== word) : [...prev, word]));
+  }, []);
 
   const doManualRedact = useCallback(() => {
     const { text, newRows } = session.redactManualTerms(extracted, terms);
@@ -297,12 +392,7 @@ export function App() {
             הוסתרו {result.count} פרטים — מוכן לשליחה ל-AI
           </div>
 
-          <textarea
-            readOnly
-            dir="auto"
-            value={result.redacted}
-            className="h-40 w-full resize-none rounded-2xl border border-zinc-200 bg-zinc-50 p-3 text-[13px] leading-relaxed"
-          />
+          <CopyableText value={result.redacted} />
 
           <div className="flex flex-wrap gap-2">
             <button
@@ -364,23 +454,10 @@ export function App() {
       {mode === "redact" && status === "picking" && (
         <div className="flex flex-col gap-3">
           <p className="text-[13px] text-zinc-500">
-            בחרו מה להסתיר: סמנו טקסט והוסיפו, או הקלידו מונח.
+            לחצו על מספר או שם כדי להסתיר אותו (וכל החזרות שלו). או הקלידו מונח.
           </p>
-          <textarea
-            ref={previewRef}
-            readOnly
-            dir="auto"
-            value={extracted}
-            className="h-28 w-full resize-none rounded-2xl border border-zinc-200 bg-zinc-50 p-3 text-[13px] leading-relaxed"
-          />
+          <ClickablePreview text={extracted} terms={terms} onToggle={toggleTerm} />
           <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={addSelection}
-              className="h-11 rounded-full border border-zinc-200 px-4 text-[13px] font-semibold transition hover:bg-zinc-50"
-            >
-              הוסף בחירה
-            </button>
             <input
               value={termInput}
               onChange={(e) => setTermInput(e.target.value)}
@@ -443,7 +520,7 @@ export function App() {
             value={answer}
             onChange={(e) => setAnswer(e.target.value)}
             placeholder="הדביקו כאן את תשובת ה-AI (עם הסימונים)…"
-            className="h-32 w-full resize-none rounded-2xl border border-zinc-200 bg-zinc-50 p-3 text-[13px] leading-relaxed placeholder:text-zinc-400"
+            className="h-28 w-full resize-none rounded-3xl border border-zinc-200 bg-zinc-50 p-4 text-[13px] leading-relaxed placeholder:text-zinc-400"
           />
 
           <div className="flex flex-wrap items-center gap-2">
@@ -488,23 +565,7 @@ export function App() {
             </p>
           )}
 
-          {restored !== null && (
-            <>
-              <textarea
-                readOnly
-                dir="auto"
-                value={restored}
-                className="h-40 w-full resize-none rounded-2xl border border-emerald-200 bg-emerald-50/50 p-3 text-[13px] leading-relaxed"
-              />
-              <button
-                type="button"
-                onClick={() => void copyRedacted(restored)}
-                className="h-12 rounded-full bg-black px-4 text-sm font-semibold text-white transition hover:brightness-110"
-              >
-                {copyState === "ok" ? "הועתק ✓" : "העתק טקסט משוחזר"}
-              </button>
-            </>
-          )}
+          {restored !== null && <CopyableText value={restored} tone="ok" />}
         </div>
       )}
 
