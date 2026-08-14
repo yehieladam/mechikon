@@ -33,6 +33,8 @@ const INSTRUCTION =
 const INSTRUCTION_MARKER = "הנחיה ל-AI (מחיקון)";
 
 // ---- UI (shadow DOM, immune to host page CSS) ---------------------------------------
+// The selection popover's current action, invoked on the button's mousedown (set in refreshPopover).
+let popAction: (() => void) | null = null;
 const ui = mountUi();
 
 function mountUi() {
@@ -166,7 +168,13 @@ function mountUi() {
   pop.className = "pop";
   const popBtn = document.createElement("button");
   popBtn.className = "cta";
-  keepFocus(popBtn);
+  // Act on mousedown (not click): mousedown always fires and preventDefault keeps the composer
+  // selection/focus intact. Relying on click was fragile — the editor could move/collapse the
+  // selection between mousedown and mouseup so the click never landed on the button.
+  popBtn.addEventListener("mousedown", (event) => {
+    event.preventDefault();
+    popAction?.();
+  });
   pop.append(popBtn);
 
   const toast = document.createElement("div");
@@ -378,7 +386,7 @@ function refreshPopover() {
   if (ctx.inEditable) {
     const value = ctx.value.trim();
     ui.popBtn.textContent = "הסתר בחירה";
-    ui.popBtn.onclick = () => {
+    popAction = () => {
       ui.pop.style.display = "none";
       const composer = activeComposer();
       if (!composer || value.length === 0) {
@@ -397,7 +405,7 @@ function refreshPopover() {
     };
   } else if (session.hasKey) {
     ui.popBtn.textContent = "שחזר בחירה";
-    ui.popBtn.onclick = () => {
+    popAction = () => {
       const { text, unmatched } = session.restore(ctx.value);
       replaceSelection(text);
       ui.pop.style.display = "none";
