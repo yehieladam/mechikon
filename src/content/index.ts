@@ -378,9 +378,18 @@ function refreshPopover() {
   if (ctx.inEditable) {
     ui.popBtn.textContent = "הסתר בחירה";
     ui.popBtn.onclick = () => {
-      session.addManualTerm(ctx.value);
-      redactAll();
       ui.pop.style.display = "none";
+      const composer = activeComposer();
+      if (!composer) {
+        return;
+      }
+      // Mask ONLY the selected value — not a full auto-redact of the whole message.
+      const { text, newRows } = session.redactManualValue(getText(composer), ctx.value);
+      if (newRows.length > 0) {
+        writeWithInstruction(composer, text, true);
+        showToast(`הוסתר: ${ctx.value.trim()}`);
+      }
+      updateChip();
     };
   } else if (session.hasKey) {
     ui.popBtn.textContent = "שחזר בחירה";

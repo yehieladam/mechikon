@@ -90,6 +90,14 @@ describe("RedactSession", () => {
     expect(text).toBe("[NAME_1] הגיע עם [NAME_1]");
   });
 
+  it("redactManualValue masks ONLY the selected value, leaving other PII untouched", () => {
+    const session = new RedactSession();
+    const { text, newRows } = session.redactManualValue('דוד כהן ת"ז 040493384', "דוד כהן");
+    expect(newRows).toHaveLength(1);
+    expect(text).toContain("[TERM_1]");
+    expect(text).toContain("040493384"); // the ID is NOT auto-redacted in manual-only mode
+  });
+
   it("reports no key until something is redacted", () => {
     const session = new RedactSession();
     expect(session.hasKey).toBe(false);
