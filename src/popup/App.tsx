@@ -1,17 +1,35 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { KeyRow } from "@engine/types";
-import { anonymizeWith } from "@engine/pipeline";
+import { anonymizeManualOnly, anonymizeWith } from "@engine/pipeline";
 import { fromKeyFile, toKeyFile } from "@engine/key";
 import { restore } from "@engine/restore";
 import { extractText, ACCEPTED } from "./extract";
 import { requestNer } from "../shared/ner";
 
-type Status = "idle" | "working" | "done" | "error";
+type Status = "idle" | "working" | "picking" | "done" | "error";
 
 interface Result {
   readonly redacted: string;
   readonly key: readonly KeyRow[];
   readonly baseName: string;
+}
+
+// Persist the last file's restore key so the "שחזור" tab is ready automatically in the same session
+// (survives closing/reopening the popup within 24h) — no need to re-load the key file by hand.
+const FILE_KEY = "fileKey.v1";
+const FILE_KEY_TTL = 24 * 60 * 60 * 1000;
+
+async function saveFileKey(rows: readonly KeyRow[]): Promise<void> {
+  await chrome.storage.local.set({ [FILE_KEY]: { rows, expiresAt: Date.now() + FILE_KEY_TTL } });
+}
+
+async function loadFileKey(): Promise<KeyRow[] | null> {
+  const bag = await chrome.storage.local.get(FILE_KEY);
+  const stored = bag[FILE_KEY] as { rows: KeyRow[]; expiresAt: number } | undefined;
+  if (!stored || stored.expiresAt <= Date.now()) {
+    return null;
+  }
+  return stored.rows;
 }
 
 function download(name: string, text: string, type: string): void {
@@ -55,8 +73,51 @@ export function App() {
   const [keyRows, setKeyRows] = useState<readonly KeyRow[] | null>(null);
   const [restored, setRestored] = useState<string | null>(null);
   const [restoreMsg, setRestoreMsg] = useState("");
+  const [redactMode, setRedactMode] = useState<"auto" | "manual">("auto");
+  const [extracted, setExtracted] = useState("");
+  const [baseName, setBaseName] = useState("");
+  const [terms, setTerms] = useState<string[]>([]);
+  const [termInput, setTermInput] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const keyInputRef = useRef<HTMLInputElement>(null);
+  const previewRef = useRef<HTMLTextAreaElement>(null);
+
+  // Auto-load the last file's key so "שחזור" needs no manual key upload in the same session.
+  useEffect(() => {
+    void loadFileKey().then((rows) => {
+      if (rows) {
+        setKeyRows(rows);
+      }
+    });
+  }, []);
+
+  const finishRedact = useCallback((redacted: string, key: readonly KeyRow[], base: string) => {
+    setResult({ redacted, key, baseName: base });
+    setKeyRows(key); // restore tab is immediately ready
+    void saveFileKey(key);
+    setKeySaved(false);
+    setStatus("done");
+  }, []);
+
+  const addTerm = useCallback((value: string) => {
+    const v = value.trim();
+    if (v.length > 0) {
+      setTerms((prev) => (prev.includes(v) ? prev : [...prev, v]));
+    }
+    setTermInput("");
+  }, []);
+
+  const addSelection = useCallback(() => {
+    const el = previewRef.current;
+    if (el && el.selectionStart !== el.selectionEnd) {
+      addTerm(el.value.slice(el.selectionStart, el.selectionEnd));
+    }
+  }, [addTerm]);
+
+  const doManualRedact = useCallback(() => {
+    const { anonymizedText, key } = anonymizeManualOnly(extracted, terms);
+    finishRedact(anonymizedText, key, baseName);
+  }, [extracted, terms, baseName, finishRedact]);
 
   const copyRedacted = useCallback(async (text: string) => {
     try {
@@ -92,26 +153,36 @@ export function App() {
     setRestoreMsg(unmatched.length > 0 ? `שוחזר · ${unmatched.length} סימונים לא זוהו` : "שוחזר ✓");
   }, [answer, keyRows]);
 
-  const handleFile = useCallback(async (file: File) => {
-    setStatus("working");
-    setError("");
-    setResult(null);
-    try {
-      const buffer = await file.arrayBuffer();
-      const text = await extractText(file.name, buffer);
-      if (!text.trim()) {
-        throw new Error("empty");
+  const handleFile = useCallback(
+    async (file: File) => {
+      setStatus("working");
+      setError("");
+      setResult(null);
+      const base = file.name.replace(/\.[^.]+$/, "");
+      setBaseName(base);
+      try {
+        const buffer = await file.arrayBuffer();
+        const text = await extractText(file.name, buffer);
+        if (!text.trim()) {
+          throw new Error("empty");
+        }
+        if (redactMode === "manual") {
+          // Manual: show the text and let the user pick exactly what to mask.
+          setExtracted(text);
+          setTerms([]);
+          setStatus("picking");
+          return;
+        }
+        const nerSpans = await requestNer(text);
+        const { anonymizedText, key } = anonymizeWith(text, nerSpans);
+        finishRedact(anonymizedText, key, base);
+      } catch (err) {
+        setError(friendlyError(err instanceof Error ? err.message : String(err), file.name));
+        setStatus("error");
       }
-      const nerSpans = await requestNer(text);
-      const { anonymizedText, key } = anonymizeWith(text, nerSpans);
-      const baseName = file.name.replace(/\.[^.]+$/, "");
-      setResult({ redacted: anonymizedText, key, baseName });
-      setStatus("done");
-    } catch (err) {
-      setError(friendlyError(err instanceof Error ? err.message : String(err), file.name));
-      setStatus("error");
-    }
-  }, []);
+    },
+    [redactMode, finishRedact],
+  );
 
   const onDrop = useCallback(
     (event: React.DragEvent) => {
@@ -158,7 +229,31 @@ export function App() {
         </button>
       </div>
 
-      {mode === "redact" && status !== "done" && (
+      {mode === "redact" && status !== "done" && status !== "picking" && (
+        <div className="mb-3 flex items-center gap-2 text-[13px]" role="group">
+          <span className="text-zinc-400">זיהוי:</span>
+          <button
+            type="button"
+            onClick={() => setRedactMode("auto")}
+            className={`h-9 rounded-full px-4 font-semibold transition ${
+              redactMode === "auto" ? "bg-ink text-white" : "text-zinc-500 hover:text-ink"
+            }`}
+          >
+            אוטומטי
+          </button>
+          <button
+            type="button"
+            onClick={() => setRedactMode("manual")}
+            className={`h-9 rounded-full px-4 font-semibold transition ${
+              redactMode === "manual" ? "bg-ink text-white" : "text-zinc-500 hover:text-ink"
+            }`}
+          >
+            ידני
+          </button>
+        </div>
+      )}
+
+      {mode === "redact" && status !== "done" && status !== "picking" && (
         <div
           role="button"
           tabIndex={0}
@@ -279,6 +374,81 @@ export function App() {
         </div>
       )}
 
+      {mode === "redact" && status === "picking" && (
+        <div className="flex flex-col gap-3">
+          <p className="text-[13px] text-zinc-500">
+            בחרו מה להסתיר: סמנו טקסט והוסיפו, או הקלידו מונח.
+          </p>
+          <textarea
+            ref={previewRef}
+            readOnly
+            dir="auto"
+            value={extracted}
+            className="h-28 w-full resize-none rounded-2xl border border-zinc-200 bg-zinc-50 p-3 text-[13px] leading-relaxed"
+          />
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={addSelection}
+              className="h-11 rounded-full border border-zinc-200 px-4 text-[13px] font-semibold transition hover:bg-zinc-50"
+            >
+              הוסף בחירה
+            </button>
+            <input
+              value={termInput}
+              onChange={(e) => setTermInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  addTerm(termInput);
+                }
+              }}
+              placeholder="מונח להסתרה…"
+              className="h-11 flex-1 rounded-full border border-zinc-200 px-4 text-[13px] placeholder:text-zinc-400"
+            />
+            <button
+              type="button"
+              onClick={() => addTerm(termInput)}
+              className="h-11 rounded-full bg-ink px-4 text-[13px] font-semibold text-white"
+            >
+              הוסף
+            </button>
+          </div>
+          {terms.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {terms.map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => setTerms((prev) => prev.filter((x) => x !== t))}
+                  className="rounded-full bg-emerald-100 px-3 py-1 text-[12px] font-medium text-emerald-800"
+                >
+                  {t} ✕
+                </button>
+              ))}
+            </div>
+          )}
+          <button
+            type="button"
+            disabled={terms.length === 0}
+            onClick={doManualRedact}
+            className="h-12 rounded-full bg-black px-4 text-sm font-semibold text-white transition hover:brightness-110 disabled:opacity-40"
+          >
+            הסתר {terms.length} מונחים
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setStatus("idle");
+              setExtracted("");
+              setTerms([]);
+            }}
+            className="text-[13px] font-medium text-zinc-400 hover:text-ink"
+          >
+            ביטול
+          </button>
+        </div>
+      )}
+
       {mode === "restore" && (
         <div className="flex flex-col gap-3">
           <textarea
@@ -290,25 +460,19 @@ export function App() {
           />
 
           <div className="flex flex-wrap items-center gap-2">
+            {keyRows ? (
+              <span className="inline-flex h-11 items-center gap-2 rounded-full bg-emerald-50 px-4 text-[13px] font-semibold text-emerald-700">
+                <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                מפתח הסשן טעון · {keyRows.length}
+              </span>
+            ) : null}
             <button
               type="button"
               onClick={() => keyInputRef.current?.click()}
-              className="h-11 rounded-full border border-zinc-200 px-4 text-sm font-semibold transition hover:bg-zinc-50"
+              className="h-11 rounded-full border border-zinc-200 px-4 text-[13px] font-semibold transition hover:bg-zinc-50"
             >
-              {keyRows ? `מפתח נטען · ${keyRows.length}` : "טען קובץ מפתח"}
+              {keyRows ? "טען מפתח אחר" : "טען קובץ מפתח"}
             </button>
-            {result?.key && (
-              <button
-                type="button"
-                onClick={() => {
-                  setKeyRows(result.key);
-                  setRestoreMsg("מפתח נטען");
-                }}
-                className="h-11 rounded-full px-3 text-[13px] font-medium text-zinc-500 hover:text-ink"
-              >
-                השתמש במפתח האחרון
-              </button>
-            )}
             <input
               ref={keyInputRef}
               type="file"
