@@ -94,7 +94,11 @@ test("chip renders and pick-mode + popover mask across the whole composer", asyn
   const finalText = await composerText(page);
   // The AI instruction is appended exactly ONCE, at the very END — not once per line / per action.
   expect(finalText.split(INSTRUCTION_MARKER).length - 1).toBe(1);
-  expect(finalText.trimEnd().endsWith(".")).toBe(true); // instruction sentence closes the message
+  // A Hebrew draft keeps the HEBREW instruction and Hebrew chip even though the masked text now holds
+  // Latin [TOKEN] placeholders (regression: tokens must not flip language to English).
+  expect(finalText).toContain("הנחיה ל-AI (מחיקון)");
+  expect(finalText).not.toContain("Note to the AI");
+  await expect(page.getByRole("button", { name: "בחר ידנית" })).toBeVisible();
   // Later lines survived (host was rewritten, not a single inner block): the email is still there.
   expect(finalText).toContain("david.cohen@gmail.com");
 

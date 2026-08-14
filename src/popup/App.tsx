@@ -5,8 +5,8 @@ import { restore } from "@engine/restore";
 import { extractText, ACCEPTED } from "./extract";
 import { requestNer } from "../shared/ner";
 import { RedactSession } from "../shared/session";
-import { withInstruction } from "../shared/instruction";
-import { defaultLang, detectLang, t, type Lang } from "../shared/i18n";
+import { detectTextLang, withInstruction } from "../shared/instruction";
+import { defaultLang, t, type Lang } from "../shared/i18n";
 
 type Status = "idle" | "working" | "picking" | "done" | "error";
 
@@ -178,7 +178,9 @@ export function App() {
   // extracted/redacted text in mask mode), falling back to the browser language when there's none yet.
   const lang = useMemo<Lang>(() => {
     const sample = mode === "restore" ? answer : extracted || result?.redacted || "";
-    return detectLang(sample, defaultLang());
+    // detectTextLang strips our Latin tokens + any appended instruction so a Hebrew document isn't
+    // read as English from its [NAME_1]-style tokens or an English note burned into result.redacted.
+    return detectTextLang(sample, defaultLang());
   }, [mode, answer, extracted, result]);
   const dir = lang === "he" ? "rtl" : "ltr";
   // A live ref so event-handler callbacks read the CURRENT language without listing it as a dep.
@@ -192,11 +194,14 @@ export function App() {
   }, [session]);
 
   const finishRedact = useCallback(
-    (redacted: string, base: string) => {
+    // `lang` is the language of the SOURCE document (computed by the caller from the file/preview text),
+    // NOT the current UI language — so a Hebrew file always gets the Hebrew AI note even on an
+    // English-locale browser, and vice versa.
+    (redacted: string, base: string, lang: Lang) => {
       // Count DISTINCT masks actually in the output (not only newly minted rows) — a value already in
       // the shared key still appears as a token, so newRows can be 0 while the text is masked.
       const count = new Set(redacted.match(/\[[^[\]]+_\d+\]/g) ?? []).size;
-      setResult({ redacted: withInstruction(redacted, langRef.current), baseName: base, count });
+      setResult({ redacted: withInstruction(redacted, lang), baseName: base, count });
       setSessionReady(session.hasKey);
       setKeySaved(false);
       setStatus("done");
@@ -218,7 +223,7 @@ export function App() {
 
   const doManualRedact = useCallback(() => {
     const { text } = session.redactManualTerms(extracted, terms);
-    finishRedact(text, baseName);
+    finishRedact(text, baseName, detectTextLang(extracted, defaultLang()));
   }, [session, extracted, terms, baseName, finishRedact]);
 
   const copyRedacted = useCallback(async (text: string) => {
@@ -287,7 +292,10 @@ export function App() {
         }
         const ner = await requestNer(text);
         const { text: redacted } = session.redact(text, ner.spans);
-        finishRedact(redacted, base);
+        // Language of the FILE (before masking) — so the instruction matches the document, not the
+        // browser locale. Also lets the results view render in the document's language.
+        setExtracted(text);
+        finishRedact(redacted, base, detectTextLang(text, defaultLang()));
       } catch (err) {
         setError(
           friendlyError(err instanceof Error ? err.message : String(err), file.name, langRef.current),
@@ -460,6 +468,7 @@ export function App() {
                 setStatus("idle");
                 setResult(null);
                 setKeySaved(false);
+                setExtracted("");
               }}
               className="text-[13px] font-medium text-zinc-400 hover:text-ink"
             >

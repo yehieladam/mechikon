@@ -9,7 +9,7 @@
  * English draft an English one. Idempotency checks BOTH markers, so switching language (or re-running)
  * never stacks two instructions.
  */
-import type { Lang } from "./i18n";
+import { defaultLang, detectLang, type Lang } from "./i18n";
 
 const RULE = "\n\n———————————————\n";
 
@@ -38,4 +38,24 @@ export function withInstruction(text: string, lang: Lang = "he"): string {
     return text;
   }
   return text + (lang === "en" ? INSTRUCTION_EN : INSTRUCTION_HE);
+}
+
+/** Remove an already-appended instruction block (from its dashed rule to the end), if present. */
+export function stripInstruction(text: string): string {
+  // The instruction always begins with the em-dash rule (see RULE) followed by the lock emoji.
+  return text.replace(/\n*—{3,}[\s\S]*$/, "");
+}
+
+// Our placeholder tokens are Latin (e.g. [NAME_1]) — they must NOT count toward language detection,
+// or a Hebrew message with several masked values would be misread as English once redacted.
+const TOKEN_RE = /\[[A-Za-z]+_\d+\]/g;
+
+/**
+ * Language of the user's ACTUAL content: strips the appended instruction and our Latin tokens before
+ * detecting, so neither the tokens nor a burned note can flip a Hebrew draft to English (or vice versa).
+ * Use this everywhere the language of composer/redacted text is needed — never raw `detectLang` on
+ * text that may already carry tokens or an instruction.
+ */
+export function detectTextLang(text: string, fallback: Lang = defaultLang()): Lang {
+  return detectLang(stripInstruction(text).replace(TOKEN_RE, " "), fallback);
 }

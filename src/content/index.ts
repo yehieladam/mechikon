@@ -10,8 +10,11 @@
  */
 import { RedactSession } from "../shared/session";
 import { requestNer } from "../shared/ner";
-import { withInstruction as buildWithInstruction } from "../shared/instruction";
-import { defaultLang, detectLang, t, type Lang } from "../shared/i18n";
+import {
+  detectTextLang,
+  withInstruction as buildWithInstruction,
+} from "../shared/instruction";
+import { defaultLang, t, type Lang } from "../shared/i18n";
 import {
   closestEditable,
   currentSelection,
@@ -568,8 +571,9 @@ let namesPending = false;
 function updateChip() {
   const composer = activeComposer();
   const text = composer ? getText(composer) : "";
-  // UI language follows the composer text (falls back to browser language when empty).
-  applyLang(detectLang(text, defaultLang()));
+  // UI language follows the composer's CONTENT (tokens + any appended instruction stripped, so a
+  // Hebrew draft with masked values isn't misread as English), falling back to the browser language.
+  applyLang(detectTextLang(text, defaultLang()));
   const distinct = composer
     ? new Set(session.detect(text).map((s) => text.slice(s.start, s.end)))
     : new Set<string>();
@@ -594,7 +598,7 @@ function writeWithInstruction(composer: Composer, redacted: string, addInstructi
   // The instruction matches the TEXT's language (so an English draft gets the English note), not the
   // chip's — usually the same, but the text is the source of truth for what the AI will read.
   const out = addInstruction
-    ? buildWithInstruction(redacted, detectLang(redacted, uiLang))
+    ? buildWithInstruction(redacted, detectTextLang(redacted, uiLang))
     : redacted;
   setWholeText(composer, out);
   highlightTokens(composer); // paint the [TOKEN_n] chips green so the user sees what was masked
