@@ -48,6 +48,7 @@ export function App() {
   const [error, setError] = useState("");
   const [dragging, setDragging] = useState(false);
   const [copyState, setCopyState] = useState<"idle" | "ok" | "fail">("idle");
+  const [keySaved, setKeySaved] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const copyRedacted = useCallback(async (text: string) => {
@@ -155,7 +156,10 @@ export function App() {
 
       {status === "done" && result && (
         <div className="flex flex-col gap-3">
-          <div className="flex items-center gap-2 rounded-xl bg-emerald-50 px-3 py-2 text-[13px] font-medium text-emerald-700">
+          <div
+            role="status"
+            className="flex items-center gap-2 rounded-xl bg-emerald-50 px-3 py-2 text-[13px] font-medium text-emerald-700"
+          >
             <span className="h-2 w-2 rounded-full bg-emerald-500" />
             הוסתרו {result.key.length} פרטים — מוכן לשליחה ל-AI
           </div>
@@ -190,25 +194,32 @@ export function App() {
             </button>
           </div>
 
-          <button
-            type="button"
-            onClick={() =>
-              download(
-                `${result.baseName}-מפתח-שחזור.json`,
-                toKeyFile(result.key),
-                "application/json;charset=utf-8",
-              )
-            }
-            className="h-11 rounded-full border border-zinc-200 px-4 text-sm font-semibold transition hover:bg-zinc-50"
-          >
-            הורד מפתח שחזור (שמרו לעצמכם)
-          </button>
+          <div className="rounded-2xl border border-amber-300 bg-amber-50/60 p-3">
+            <button
+              type="button"
+              onClick={() => {
+                download(
+                  `${result.baseName}-מפתח-שחזור.json`,
+                  toKeyFile(result.key),
+                  "application/json;charset=utf-8",
+                );
+                setKeySaved(true);
+              }}
+              className="h-11 w-full rounded-full bg-amber-500 px-4 text-sm font-semibold text-white transition hover:brightness-110"
+            >
+              {keySaved ? "מפתח נשמר ✓" : "הורד מפתח שחזור"}
+            </button>
+            <p className="mt-2 text-center text-[12px] font-medium text-amber-700">
+              בלי הקובץ הזה לא ניתן לשחזר את המידע בהמשך
+            </p>
+          </div>
 
           <button
             type="button"
             onClick={() => {
               setStatus("idle");
               setResult(null);
+              setKeySaved(false);
             }}
             className="text-[13px] font-medium text-zinc-400 hover:text-ink"
           >

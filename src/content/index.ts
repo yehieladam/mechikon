@@ -62,11 +62,13 @@ function mountUi() {
     .chip, .pop, .toast { position: fixed; z-index: 2147483647; direction: rtl; font-family: var(--font); }
     button { font-family: var(--font); cursor: pointer; border: 0; -webkit-font-smoothing: antialiased; }
 
+    /* Pinned bottom-LEFT explicitly (inset-inline-start resolves to the RIGHT under dir:rtl, where the
+       send button lives) so we never cover the composer's send control. */
     .chip {
-      bottom: 24px; inset-inline-start: 24px; display: none; align-items: center; gap: 13px;
+      bottom: 24px; left: 24px; right: auto; display: none; align-items: center; gap: 13px;
       background: var(--glass-card); -webkit-backdrop-filter: blur(34px) saturate(200%);
       backdrop-filter: blur(34px) saturate(200%); border: .5px solid var(--hairline);
-      border-radius: 20px; padding: 11px 12px 11px 18px; box-shadow: var(--shadow);
+      border-radius: 20px; padding: 12px 12px 12px 18px; box-shadow: var(--shadow);
       animation: rise .34s var(--ease);
     }
     /* glass sheen */
@@ -74,14 +76,30 @@ function mountUi() {
       content: ""; position: absolute; inset: 0; border-radius: 20px; pointer-events: none;
       background: linear-gradient(180deg, rgba(255,255,255,.55), rgba(255,255,255,0) 42%);
     }
+    /* One dot, three unmistakable states: detected (amber, pulsing = act), pending (green, spinning
+       = working), protected (green, check = safe). Motion is gated by prefers-reduced-motion below. */
     .dot {
-      width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto; background: var(--orange);
-      box-shadow: 0 0 0 4px rgba(255,149,0,.16), 0 0 10px rgba(255,149,0,.55);
+      position: relative; width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto;
+      background: var(--orange); box-shadow: 0 0 0 4px rgba(255,149,0,.16);
       transition: background .35s var(--ease), box-shadow .35s var(--ease);
     }
+    .dot.detected { animation: pulse 1.8s var(--ease) infinite; }
+    @keyframes pulse {
+      0%, 100% { box-shadow: 0 0 0 4px rgba(255,149,0,.18); }
+      50% { box-shadow: 0 0 0 8px rgba(255,149,0,.04); }
+    }
+    .dot.pending { background: var(--green); box-shadow: 0 0 0 4px rgba(52,199,89,.14); }
+    .dot.pending::after {
+      content: ""; position: absolute; inset: -5px; border-radius: 50%;
+      border: 2px solid transparent; border-top-color: var(--green); animation: spin .8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
     .dot.green {
-      background: var(--green);
-      box-shadow: 0 0 0 4px rgba(52,199,89,.16), 0 0 10px rgba(52,199,89,.55);
+      background: var(--green); box-shadow: 0 0 0 4px rgba(52,199,89,.16), 0 0 10px rgba(52,199,89,.5);
+    }
+    .dot.green::after {
+      content: ""; position: absolute; left: 3px; top: 1px; width: 2px; height: 5px;
+      border: solid #fff; border-width: 0 1.6px 1.6px 0; transform: rotate(45deg);
     }
     .info { display: flex; flex-direction: column; gap: 1px; line-height: 1.2; }
     .brand { font-size: 10px; font-weight: 700; letter-spacing: .1em; color: rgba(10,10,10,.4); }
@@ -90,7 +108,7 @@ function mountUi() {
 
     .cta {
       position: relative; color: #fff; font-size: 13.5px; font-weight: 600; letter-spacing: -.006em;
-      height: 40px; padding: 0 18px; border-radius: 999px; overflow: hidden;
+      height: 44px; padding: 0 18px; border-radius: 999px; overflow: hidden;
       background: linear-gradient(180deg, rgba(46,46,52,.94), rgba(8,8,10,.96));
       -webkit-backdrop-filter: blur(14px) saturate(180%); backdrop-filter: blur(14px) saturate(180%);
       border: .5px solid rgba(255,255,255,.16);
@@ -118,21 +136,25 @@ function mountUi() {
     .actions { display: flex; align-items: center; gap: 8px; }
 
     .pop { display: none; transform: translate(-50%, -100%); animation: rise .2s var(--ease); }
-    .pop .cta { height: 38px; padding: 0 16px; font-size: 13px; white-space: nowrap; }
+    .pop .cta { height: 44px; padding: 0 18px; font-size: 13.5px; white-space: nowrap; }
 
     .toast {
-      bottom: 90px; inset-inline-start: 24px; display: none; align-items: center; gap: 10px; max-width: 360px;
+      bottom: 92px; left: 24px; right: auto; display: none; align-items: center; gap: 10px; max-width: 360px;
       background: var(--glass-card); -webkit-backdrop-filter: blur(34px) saturate(200%);
       backdrop-filter: blur(34px) saturate(200%); border: .5px solid var(--hairline);
       border-radius: 14px; padding: 12px 16px; box-shadow: var(--shadow);
       color: var(--ink); font-size: 14px; font-weight: 500; animation: rise .34s var(--ease);
     }
+    /* Toast dot color follows meaning, not always-green: ok=green, error=amber, info=grey. */
     .toast::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--green); flex: 0 0 auto; }
+    .toast[data-kind="error"]::before { background: var(--orange); }
+    .toast[data-kind="info"]::before { background: rgba(10,10,10,.35); }
 
     @keyframes rise { from { opacity: 0; transform: translateY(8px) scale(.98); } }
     @media (prefers-reduced-motion: reduce) {
       .chip, .pop, .toast { animation: none; }
       .cta, .dot { transition: none; }
+      .dot.detected, .dot.pending::after { animation: none; }
     }
   `;
 
@@ -148,6 +170,7 @@ function mountUi() {
   brand.textContent = "MECHIKON";
   const chipLabel = document.createElement("span");
   chipLabel.className = "label";
+  chipLabel.setAttribute("aria-live", "polite");
   info.append(brand, chipLabel);
   const actions = document.createElement("div");
   actions.className = "actions";
@@ -179,6 +202,8 @@ function mountUi() {
 
   const toast = document.createElement("div");
   toast.className = "toast";
+  toast.setAttribute("role", "status");
+  toast.setAttribute("aria-live", "polite");
 
   shadow.append(style, chip, pop, toast);
   document.documentElement.appendChild(host);
@@ -191,15 +216,17 @@ function keepFocus(btn: HTMLElement) {
   btn.addEventListener("mousedown", (e) => e.preventDefault());
 }
 
-function showToast(text: string) {
+type ToastKind = "ok" | "error" | "info";
+function showToast(text: string, kind: ToastKind = "ok") {
   ui.toast.textContent = text;
+  ui.toast.dataset.kind = kind;
   ui.toast.style.display = "flex";
   window.setTimeout(() => (ui.toast.style.display = "none"), 4000);
 }
 
-/** Sensitive values found but not yet redacted: orange dot + count + הסתר (and שחזר if a key exists). */
+/** Sensitive values found but not yet redacted: amber pulsing dot + count + הסתר (and שחזר if a key exists). */
 function setChipDetected(count: number) {
-  ui.dot.classList.remove("green");
+  ui.dot.className = "dot detected";
   ui.chipLabel.textContent = `${count} פרטים רגישים`;
   ui.chipBtn.style.display = "";
   ui.restoreBtn.style.display = session.hasKey ? "" : "none";
@@ -207,18 +234,18 @@ function setChipDetected(count: number) {
 }
 
 /** Deterministic values masked, but names/orgs still pending (model loading or NER pass not done):
- *  ORANGE dot + "partly protected" — never a full-green "safe" claim while a name may be exposed. */
+ *  spinning green dot + "masking names…" — never a full "safe" claim while a name may be exposed. */
 function setChipPending() {
-  ui.dot.classList.remove("green");
-  ui.chipLabel.textContent = "מוגן חלקית · שמות בהמתנה";
+  ui.dot.className = "dot pending";
+  ui.chipLabel.textContent = "מסתיר שמות…";
   ui.chipBtn.style.display = "none";
   ui.restoreBtn.style.display = session.hasKey ? "" : "none";
   ui.chip.style.display = "flex";
 }
 
-/** Everything redacted (incl. names, model was ready): green dot, only שחזר. */
+/** Everything redacted (incl. names, model was ready): green check dot, only שחזר. */
 function setChipProtected(count: number) {
-  ui.dot.classList.add("green");
+  ui.dot.className = "dot green";
   ui.chipLabel.textContent = count > 0 ? `מוגן · ${count} הוסתרו` : "מוגן";
   ui.chipBtn.style.display = "none";
   ui.restoreBtn.style.display = "";
@@ -233,7 +260,7 @@ function hideChip() {
  *  in place. Skips the composer and script/style. Robust across sites (no per-site selectors). */
 function restoreVisible() {
   if (!session.hasKey) {
-    showToast("אין מפתח שחזור עדיין — קודם הסתר פרטים");
+    showToast("אין מה לשחזר עדיין — קודם הסתירו פרטים", "error");
     return;
   }
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
@@ -265,7 +292,10 @@ function restoreVisible() {
       changed += 1;
     }
   }
-  showToast(changed > 0 ? `שוחזר ב-${changed} מקומות` : "לא נמצאו טוקנים לשחזור בעמוד");
+  showToast(
+    changed > 0 ? `שוחזר ב-${changed} מקומות` : "לא נמצאו סימונים לשחזור בעמוד",
+    changed > 0 ? "ok" : "error",
+  );
 }
 
 // ---- auto-detect: watch the composer -------------------------------------------------
@@ -346,8 +376,9 @@ async function redactAll() {
   setChipPending();
   showToast(
     detPass.newRows.length > 0
-      ? `הוסתרו ${detPass.newRows.length} פרטים · נוספה הנחיה ל-AI`
+      ? `הוסתרו ${detPass.newRows.length} פרטים · נוספה הנחיה`
       : "נסרק — ממתין לזיהוי שמות",
+    detPass.newRows.length > 0 ? "ok" : "info",
   );
 
   // Pass 2 — NER names/orgs. Detect on the pre-redaction text, then re-read the CURRENT composer and
@@ -390,7 +421,7 @@ function refreshPopover() {
       ui.pop.style.display = "none";
       const composer = activeComposer();
       if (!composer || value.length === 0) {
-        showToast("לא ניתן להסתיר את הבחירה");
+        showToast("לא ניתן להסתיר את הבחירה", "error");
         return;
       }
       // Mask ONLY the selected value — not a full auto-redact of the whole message.
@@ -399,7 +430,7 @@ function refreshPopover() {
         writeWithInstruction(composer, text, true);
         showToast(`הוסתר: ${value}`);
       } else {
-        showToast(`לא נמצא "${value}" בתיבה`);
+        showToast(`לא נמצא "${value}" בתיבה`, "error");
       }
       updateChip();
     };
@@ -409,14 +440,18 @@ function refreshPopover() {
       const { text, unmatched } = session.restore(ctx.value);
       replaceSelection(text);
       ui.pop.style.display = "none";
-      showToast(unmatched.length > 0 ? `שוחזר — ${unmatched.length} טוקנים לא זוהו` : "שוחזר");
+      showToast(
+        unmatched.length > 0 ? `שוחזר — ${unmatched.length} סימונים לא זוהו` : "שוחזר",
+        unmatched.length > 0 ? "info" : "ok",
+      );
     };
   } else {
     ui.pop.style.display = "none";
     return;
   }
   ui.pop.style.left = `${ctx.rect.left + ctx.rect.width / 2}px`;
-  ui.pop.style.top = `${ctx.rect.top - 6}px`;
+  // Clamp to the viewport top so a selection near the top doesn't push the popover off-screen.
+  ui.pop.style.top = `${Math.max(52, ctx.rect.top - 6)}px`;
   ui.pop.style.display = "block";
 }
 
