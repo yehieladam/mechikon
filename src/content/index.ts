@@ -63,8 +63,11 @@ function mountUi() {
       background: var(--glass-card); -webkit-backdrop-filter: blur(34px) saturate(200%);
       backdrop-filter: blur(34px) saturate(200%); border: .5px solid var(--hairline);
       border-radius: 20px; padding: 12px 12px 12px 18px; box-shadow: var(--shadow);
-      animation: rise .34s var(--ease);
+      animation: rise .34s var(--ease); cursor: grab; touch-action: none; user-select: none;
     }
+    .chip.dragging { cursor: grabbing; animation: none; }
+    /* the drag surface is the chip itself; buttons opt back into the pointer so they stay clickable */
+    .chip .cta { cursor: pointer; }
     /* glass sheen */
     .chip::before {
       content: ""; position: absolute; inset: 0; border-radius: 20px; pointer-events: none;
@@ -210,8 +213,100 @@ function mountUi() {
   shadow.append(style, chip, pop, toast);
   document.documentElement.appendChild(host);
 
+  makeDraggable(chip);
+
   return { chipLabel, chip, dot, chipBtn, pickBtn, restoreBtn, pop, popBtn, toast };
 }
+
+// ---- drag: let the user move the chip so it never covers the composer / send button --------
+const CHIP_POS_KEY = "chipPos.v1";
+
+/** Drag the chip by its body (buttons excluded). Position persists in chrome.storage.local and is
+ *  clamped to the viewport on restore + on resize so it can never end up off-screen. */
+function makeDraggable(chip: HTMLElement) {
+  let startX = 0;
+  let startY = 0;
+  let originLeft = 0;
+  let originTop = 0;
+  let dragging = false;
+
+  const pin = (left: number, top: number) => {
+    const maxLeft = Math.max(0, window.innerWidth - chip.offsetWidth);
+    const maxTop = Math.max(0, window.innerHeight - chip.offsetHeight);
+    const l = Math.min(Math.max(0, left), maxLeft);
+    const t = Math.min(Math.max(0, top), maxTop);
+    chip.style.left = `${l}px`;
+    chip.style.top = `${t}px`;
+    chip.style.right = "auto";
+    chip.style.bottom = "auto";
+    return { l, t };
+  };
+
+  const onMove = (e: PointerEvent) => {
+    if (!dragging) {
+      return;
+    }
+    pin(originLeft + (e.clientX - startX), originTop + (e.clientY - startY));
+  };
+
+  const onUp = () => {
+    if (!dragging) {
+      return;
+    }
+    dragging = false;
+    chip.classList.remove("dragging");
+    document.removeEventListener("pointermove", onMove, true);
+    document.removeEventListener("pointerup", onUp, true);
+    document.removeEventListener("pointercancel", onUp, true);
+    void chrome.storage.local.set({
+      [CHIP_POS_KEY]: { left: parseFloat(chip.style.left), top: parseFloat(chip.style.top) },
+    });
+  };
+
+  chip.addEventListener("pointerdown", (e) => {
+    // Buttons (and anything inside them) must keep their own click — only the chip body drags.
+    if ((e.target as HTMLElement).closest("button")) {
+      return;
+    }
+    dragging = true;
+    startX = e.clientX;
+    startY = e.clientY;
+    const rect = chip.getBoundingClientRect();
+    originLeft = rect.left;
+    originTop = rect.top;
+    chip.classList.add("dragging");
+    // Capture the pointer so we ALWAYS get the terminating pointerup/pointercancel on the chip —
+    // otherwise a release outside the window is never delivered and the chip sticks to the cursor.
+    try {
+      chip.setPointerCapture(e.pointerId);
+    } catch {
+      // setPointerCapture can throw on a stale pointerId — the document listeners still cover it.
+    }
+    document.addEventListener("pointermove", onMove, true);
+    document.addEventListener("pointerup", onUp, true);
+    document.addEventListener("pointercancel", onUp, true); // touch scroll/gesture cancels the drag
+  });
+
+  // Re-clamp to the current viewport. Exposed so it can run when the chip first becomes visible
+  // (it's display:none at restore, so its height is 0 then and can't be clamped against yet).
+  reclampChipPosition = () => {
+    if (chip.style.left) {
+      pin(parseFloat(chip.style.left), parseFloat(chip.style.top));
+    }
+  };
+
+  // Restore the saved position (if any) and keep it on-screen when the window resizes.
+  void chrome.storage.local.get(CHIP_POS_KEY).then((bag) => {
+    const saved = bag[CHIP_POS_KEY] as { left: number; top: number } | undefined;
+    if (saved && Number.isFinite(saved.left) && Number.isFinite(saved.top)) {
+      pin(saved.left, saved.top);
+    }
+  });
+  window.addEventListener("resize", () => reclampChipPosition());
+}
+
+// Re-clamp the dragged chip to the viewport; assigned by makeDraggable, called once the chip is shown.
+let reclampChipPosition: () => void = () => {};
 
 // ---- click-to-hide: pick mode --------------------------------------------------------
 // When ON, a click on any word/number in a composer masks exactly that value in place (and every
@@ -383,22 +478,40 @@ function restoreVisible() {
 
 // ---- auto-detect: watch the composer -------------------------------------------------
 let detectTimer = 0;
-document.addEventListener(
-  "input",
-  (e) => {
-    const t = e.target as HTMLElement | null;
-    if (!t) {
-      return;
+function scheduleDetect() {
+  const composer = focusedComposer();
+  if (composer) {
+    lastComposer = composer;
+  }
+  window.clearTimeout(detectTimer);
+  detectTimer = window.setTimeout(updateChip, 350);
+}
+// Typing fires "input"; clicking into a box that ALREADY holds text fires "focusin" (no input) — cover
+// both so a composer that had text before the script loaded still lights up the chip.
+document.addEventListener("input", scheduleDetect, true);
+document.addEventListener("focusin", scheduleDetect, true);
+
+/** Find a composer that already contains text (page loaded with a draft, or the extension reloaded
+ *  after the user typed). Returns the first non-empty text-bearing composer, else null.
+ *  Only TEXT-like inputs are matched — a bare `input` selector would also catch checkboxes (value
+ *  "on"), hidden fields, and submit buttons, whose non-empty `.value` would make us mask into the
+ *  WRONG element. */
+function findComposerWithText(): Composer | null {
+  const focused = focusedComposer();
+  if (focused && getText(focused).trim().length > 0) {
+    return focused;
+  }
+  const candidates = document.querySelectorAll<HTMLElement>(
+    "textarea, input[type='text'], input[type='search'], input[type='url'], input[type='email'], " +
+      "input:not([type]), [contenteditable='true'], [contenteditable='']",
+  );
+  for (const el of candidates) {
+    if (getText(el).trim().length > 0) {
+      return el;
     }
-    const composer = focusedComposer();
-    if (composer) {
-      lastComposer = composer;
-    }
-    window.clearTimeout(detectTimer);
-    detectTimer = window.setTimeout(updateChip, 350);
-  },
-  true,
-);
+  }
+  return null;
+}
 
 /** The composer to act on: the focused one, or the last focused one IF it's still in the DOM (SPA
  *  chat sites detach the editor on send/navigate — never write to a detached node). */
@@ -410,6 +523,13 @@ function activeComposer(): Composer | null {
   }
   if (lastComposer && lastComposer.isConnected) {
     return lastComposer;
+  }
+  // Nothing focused and no live last-composer — fall back to any box that already holds text (draft
+  // present before focus, or a fresh reload) so the chip can still act on it.
+  const withText = findComposerWithText();
+  if (withText) {
+    lastComposer = withText;
+    return withText;
   }
   lastComposer = null;
   return null;
@@ -436,7 +556,10 @@ function updateChip() {
   } else {
     exitPickMode(); // composer emptied (e.g. message sent) — don't leave pick mode stuck on
     hideChip();
+    return;
   }
+  // The chip is now visible; re-clamp its restored position against its real (non-zero) height.
+  reclampChipPosition();
 }
 
 function writeWithInstruction(composer: Composer, redacted: string, addInstruction: boolean) {
@@ -557,8 +680,11 @@ chrome.runtime.onMessage.addListener((msg) => {
 });
 
 // Restore the key from storage (survives reload within the 24h window); then show the chip's שחזר
-// affordance if a key from earlier today is still around.
+// affordance if a key from earlier today is still around, and light up for any draft already in a box.
 void session.hydrate().then(() => updateChip());
+// SPA composers mount after our script — retry the initial scan a few times so a pre-existing draft
+// is picked up even if the editor wasn't in the DOM yet at load.
+[400, 1200, 2500].forEach((ms) => window.setTimeout(updateChip, ms));
 
 // eslint-disable-next-line no-console
 console.log("[mechikon] inline content script ready on", location.host);
