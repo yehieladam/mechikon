@@ -40,6 +40,8 @@ export default defineManifest({
         "https://chat.openai.com/*",
         "https://claude.ai/*",
         "https://gemini.google.com/*",
+        // E2E-only: injected on localhost when MECHIKON_E2E is set at build time. Never in a real build.
+        ...(process.env.MECHIKON_E2E ? ["http://localhost:5599/*"] : []),
       ],
       js: ["src/content/index.ts"],
       run_at: "document_idle",

@@ -29,7 +29,13 @@ export function focusedComposer(): Composer | null {
 }
 
 export function getText(el: Composer): string {
-  return isInput(el) ? el.value : el.textContent ?? "";
+  if (isInput(el)) {
+    return el.value;
+  }
+  // innerText (not textContent) so line breaks between the editor's inner blocks/<br> are preserved —
+  // textContent glues every paragraph into one line, which then gets written back as a single flat line
+  // and mangles multi-line drafts. Fall back to textContent if innerText is unavailable.
+  return el.innerText ?? el.textContent ?? "";
 }
 
 /** Replace the entire composer content with `text`, as one native edit. */
@@ -244,14 +250,26 @@ export function wordAtPoint(x: number, y: number): string | null {
   return text.slice(start, end);
 }
 
+/**
+ * The editing HOST for a node — the OUTERMOST contentEditable element, not the nearest one. In rich
+ * editors (Gemini, Claude, ProseMirror) every line is an inner block that INHERITS contenteditable, so
+ * the nearest ancestor is a single paragraph. Operating on that reads/writes one line only, flattens
+ * the rest, and re-appends the AI instruction mid-text. Climbing to the host makes every manual action
+ * see and rewrite the whole composer.
+ */
 export function closestEditable(node: Node | null): HTMLElement | null {
   let el: HTMLElement | null =
     node && node.nodeType === 1 ? (node as HTMLElement) : node?.parentElement ?? null;
-  while (el) {
-    if (el.isContentEditable) {
-      return el;
-    }
+  while (el && !el.isContentEditable) {
     el = el.parentElement;
   }
-  return null;
+  if (!el) {
+    return null;
+  }
+  // Climb to the highest still-editable ancestor (the element that actually carries the contenteditable).
+  let host = el;
+  for (let p = host.parentElement; p && p.isContentEditable; p = p.parentElement) {
+    host = p;
+  }
+  return host;
 }

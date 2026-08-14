@@ -371,11 +371,17 @@ document.addEventListener(
     }
     event.preventDefault(); // don't move the caret — we're masking, not editing
     event.stopPropagation();
-    const { text, newRows } = session.redactManualValue(getText(editable), word);
-    if (newRows.length > 0) {
+    const src = getText(editable);
+    const { text } = session.redactManualValue(src, word);
+    // Write whenever the text actually changed — NOT only when a brand-new row was minted. A value
+    // already in the key (masked earlier this session) reuses its token and mints no new row, but the
+    // composer still needs the substitution, or the click looks like it did nothing.
+    if (text !== src) {
       writeWithInstruction(editable, text, true);
       showToast(`הוסתר: ${word}`);
       updateChip();
+    } else {
+      showToast(`לא נמצא "${word}" להסתרה`, "info");
     }
   },
   true,
@@ -639,9 +645,11 @@ function refreshPopover() {
         showToast("לא ניתן להסתיר את הבחירה", "error");
         return;
       }
-      // Mask ONLY the selected value — not a full auto-redact of the whole message.
-      const { text, newRows } = session.redactManualValue(getText(composer), value);
-      if (newRows.length > 0) {
+      // Mask ONLY the selected value — not a full auto-redact of the whole message. Write whenever the
+      // text changed (a repeated value reuses its token and mints no new row, but still must be masked).
+      const src = getText(composer);
+      const { text } = session.redactManualValue(src, value);
+      if (text !== src) {
         writeWithInstruction(composer, text, true);
         showToast(`הוסתר: ${value}`);
       } else {
