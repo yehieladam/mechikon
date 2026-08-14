@@ -376,18 +376,22 @@ function refreshPopover() {
     return;
   }
   if (ctx.inEditable) {
+    const value = ctx.value.trim();
     ui.popBtn.textContent = "הסתר בחירה";
     ui.popBtn.onclick = () => {
       ui.pop.style.display = "none";
       const composer = activeComposer();
-      if (!composer) {
+      if (!composer || value.length === 0) {
+        showToast("לא ניתן להסתיר את הבחירה");
         return;
       }
       // Mask ONLY the selected value — not a full auto-redact of the whole message.
-      const { text, newRows } = session.redactManualValue(getText(composer), ctx.value);
+      const { text, newRows } = session.redactManualValue(getText(composer), value);
       if (newRows.length > 0) {
         writeWithInstruction(composer, text, true);
-        showToast(`הוסתר: ${ctx.value.trim()}`);
+        showToast(`הוסתר: ${value}`);
+      } else {
+        showToast(`לא נמצא "${value}" בתיבה`);
       }
       updateChip();
     };
