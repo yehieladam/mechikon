@@ -45,3 +45,4 @@ scripts/ocr-calibration*.json
 
 # Claude Code local session data
 .claude/
+public/vendor/
