@@ -25,8 +25,10 @@ import {
 
 const session = new RedactSession();
 let lastComposer: Composer | null = null;
-// Re-clamp the dragged chip to the viewport; assigned by makeDraggable (called from mountUi below),
-// so it MUST be declared before that call or the assignment hits the `let` temporal dead zone.
+// These are used by makeDraggable, which mountUi() calls at module load — so they MUST be declared
+// before that call, or accessing them hits the `let`/`const` temporal dead zone and the whole content
+// script throws at load (a runtime error tsc/build do not catch).
+const CHIP_POS_KEY = "chipPos.v1";
 let reclampChipPosition: () => void = () => {};
 
 // ---- UI (shadow DOM, immune to host page CSS) ---------------------------------------
@@ -222,7 +224,6 @@ function mountUi() {
 }
 
 // ---- drag: let the user move the chip so it never covers the composer / send button --------
-const CHIP_POS_KEY = "chipPos.v1";
 
 /** Drag the chip by its body (buttons excluded). Position persists in chrome.storage.local and is
  *  clamped to the viewport on restore + on resize so it can never end up off-screen. */
