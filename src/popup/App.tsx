@@ -171,12 +171,18 @@ export function App() {
     void session.hydrate().then(() => setSessionReady(session.hasKey));
   }, [session]);
 
-  const finishRedact = useCallback((redacted: string, base: string, count: number) => {
-    setResult({ redacted: withInstruction(redacted), baseName: base, count });
-    setSessionReady(true);
-    setKeySaved(false);
-    setStatus("done");
-  }, []);
+  const finishRedact = useCallback(
+    (redacted: string, base: string) => {
+      // Count DISTINCT masks actually in the output (not only newly minted rows) — a value already in
+      // the shared key still appears as a token, so newRows can be 0 while the text is masked.
+      const count = new Set(redacted.match(/\[[^[\]]+_\d+\]/g) ?? []).size;
+      setResult({ redacted: withInstruction(redacted), baseName: base, count });
+      setSessionReady(session.hasKey);
+      setKeySaved(false);
+      setStatus("done");
+    },
+    [session],
+  );
 
   const addTerm = useCallback((value: string) => {
     const v = value.trim();
@@ -191,8 +197,8 @@ export function App() {
   }, []);
 
   const doManualRedact = useCallback(() => {
-    const { text, newRows } = session.redactManualTerms(extracted, terms);
-    finishRedact(text, baseName, newRows.length);
+    const { text } = session.redactManualTerms(extracted, terms);
+    finishRedact(text, baseName);
   }, [session, extracted, terms, baseName, finishRedact]);
 
   const copyRedacted = useCallback(async (text: string) => {
@@ -256,8 +262,8 @@ export function App() {
           return;
         }
         const ner = await requestNer(text);
-        const { text: redacted, newRows } = session.redact(text, ner.spans);
-        finishRedact(redacted, base, newRows.length);
+        const { text: redacted } = session.redact(text, ner.spans);
+        finishRedact(redacted, base);
       } catch (err) {
         setError(friendlyError(err instanceof Error ? err.message : String(err), file.name));
         setStatus("error");

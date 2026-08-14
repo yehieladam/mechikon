@@ -41,7 +41,15 @@ export class RedactSession {
   private readonly labelCounters = new Map<string, number>();
 
   async hydrate(): Promise<void> {
-    this.key = await loadKey();
+    const stored = await loadKey();
+    // Merge (don't clobber): keep any rows this session added before hydrate's load resolved.
+    const byPlaceholder = new Map(stored.map((row) => [row.placeholder, row]));
+    for (const row of this.key) {
+      if (!byPlaceholder.has(row.placeholder)) {
+        byPlaceholder.set(row.placeholder, row);
+      }
+    }
+    this.key = [...byPlaceholder.values()];
     this.reindex();
   }
 

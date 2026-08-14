@@ -234,6 +234,13 @@ export function wordAtPoint(x: number, y: number): string | null {
   while (end < text.length && isWord(text[end])) {
     end += 1;
   }
+  // Reject a click INSIDE an existing placeholder token, e.g. the "NUM"/"1" of "[NUM_1]" — masking
+  // those would nest tokens and orphan the original mapping (breaking restore).
+  const before = start > 0 ? text[start - 1] : "";
+  const after = end < text.length ? text[end] : "";
+  if ((before === "[" || before === "_") && (after === "_" || after === "]")) {
+    return null;
+  }
   return text.slice(start, end);
 }
 

@@ -25,7 +25,7 @@ export function requestNer(text: string, timeoutMs = 8000): Promise<NerResult> {
       chrome.runtime.sendMessage({ type: "ner:request", text }, (resp) => {
         clearTimeout(timer);
         void chrome.runtime.lastError; // read to silence "Unchecked runtime.lastError"
-        finish(resp?.ok ? { spans: resp.spans as Span[], ok: true } : { spans: [], ok: false });
+        finish(resp?.ok ? { spans: (resp.spans as Span[]) ?? [], ok: true } : { spans: [], ok: false });
       });
     } catch {
       clearTimeout(timer);

@@ -27,8 +27,22 @@ export async function loadKey(): Promise<KeyRow[]> {
   return stored.rows;
 }
 
+/** Merge into the stored key (union by placeholder, keeping the existing mapping on conflict) so a
+ *  save from one surface never drops rows another surface added — the fire-and-forget overwrite would
+ *  otherwise lose them. Refreshes the sliding 24h expiry. */
 export async function saveKey(rows: KeyRow[]): Promise<void> {
-  const record: StoredKey = { version: STORAGE_KEY, rows, expiresAt: Date.now() + TTL_MS };
+  const existing = await loadKey();
+  const byPlaceholder = new Map(existing.map((row) => [row.placeholder, row]));
+  for (const row of rows) {
+    if (!byPlaceholder.has(row.placeholder)) {
+      byPlaceholder.set(row.placeholder, row);
+    }
+  }
+  const record: StoredKey = {
+    version: STORAGE_KEY,
+    rows: [...byPlaceholder.values()],
+    expiresAt: Date.now() + TTL_MS,
+  };
   await chrome.storage.local.set({ [STORAGE_KEY]: record });
 }
 

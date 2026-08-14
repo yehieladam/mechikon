@@ -10,7 +10,7 @@
  */
 import { RedactSession } from "../shared/session";
 import { requestNer } from "../shared/ner";
-import { INSTRUCTION, INSTRUCTION_MARKER } from "../shared/instruction";
+import { withInstruction as buildWithInstruction } from "../shared/instruction";
 import {
   closestEditable,
   currentSelection,
@@ -219,11 +219,40 @@ function mountUi() {
 let pickMode = false;
 
 function togglePickMode() {
-  pickMode = !pickMode;
-  paintPickBtn();
-  document.documentElement.style.cursor = pickMode ? "crosshair" : "";
-  showToast(pickMode ? "מצב בחירה: לחצו על מילים להסתרה" : "מצב בחירה כבוי", "info");
+  if (pickMode) {
+    exitPickMode();
+  } else {
+    enterPickMode();
+  }
 }
+
+function enterPickMode() {
+  pickMode = true;
+  document.documentElement.style.cursor = "crosshair";
+  paintPickBtn();
+  showToast("מצב בחירה: לחצו על מילים להסתרה (Esc ליציאה)", "info");
+}
+
+/** Always safe to call — leaves the mode and restores the cursor so it can't get stuck globally
+ *  (e.g. after the user sends the message without toggling off). */
+function exitPickMode() {
+  if (!pickMode) {
+    return;
+  }
+  pickMode = false;
+  document.documentElement.style.cursor = "";
+  paintPickBtn();
+}
+
+document.addEventListener(
+  "keydown",
+  (event) => {
+    if (event.key === "Escape") {
+      exitPickMode();
+    }
+  },
+  true,
+);
 
 function paintPickBtn() {
   ui.pickBtn.textContent = pickMode ? "● בחירה פעילה" : "בחר ידנית";
@@ -405,14 +434,14 @@ function updateChip() {
   } else if (text.trim().length > 0) {
     setChipIdle(); // text present, nothing auto-detected — still offer manual pick
   } else {
+    exitPickMode(); // composer emptied (e.g. message sent) — don't leave pick mode stuck on
     hideChip();
   }
 }
 
 function writeWithInstruction(composer: Composer, redacted: string, addInstruction: boolean) {
-  const withInstruction =
-    addInstruction && !redacted.includes(INSTRUCTION_MARKER) ? redacted + INSTRUCTION : redacted;
-  setWholeText(composer, withInstruction);
+  const out = addInstruction ? buildWithInstruction(redacted) : redacted;
+  setWholeText(composer, out);
   highlightTokens(composer); // paint the [TOKEN_n] chips green so the user sees what was masked
 }
 
@@ -482,7 +511,7 @@ function refreshPopover() {
       // Operate on the exact element the selection is in (not whatever is "focused") so the value is
       // always found and replaced in the right place.
       const composer = ctx.el;
-      if (!composer || value.length === 0) {
+      if (!composer || !composer.isConnected || value.length === 0) {
         showToast("לא ניתן להסתיר את הבחירה", "error");
         return;
       }
