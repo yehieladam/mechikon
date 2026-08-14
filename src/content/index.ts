@@ -19,6 +19,7 @@ import {
   highlightTokens,
   replaceSelection,
   setWholeText,
+  wordAtPoint,
   type Composer,
 } from "./editor";
 
@@ -76,6 +77,7 @@ function mountUi() {
       background: var(--orange); box-shadow: 0 0 0 4px rgba(255,149,0,.16);
       transition: background .35s var(--ease), box-shadow .35s var(--ease);
     }
+    .dot.idle { background: rgba(10,10,10,.28); box-shadow: 0 0 0 4px rgba(10,10,10,.05); }
     .dot.detected { animation: pulse 1.8s var(--ease) infinite; }
     @keyframes pulse {
       0%, 100% { box-shadow: 0 0 0 4px rgba(255,149,0,.18); }
@@ -126,6 +128,8 @@ function mountUi() {
     .cta.ghost::after { background: linear-gradient(180deg, rgba(255,255,255,.5), rgba(255,255,255,0)); }
     .cta.ghost:hover { filter: brightness(1.03);
       box-shadow: 0 8px 18px rgba(0,0,0,.1), inset 0 1px 0 rgba(255,255,255,.95); }
+    /* active toggle (pick mode ON) — filled ink */
+    .cta.ghost.active { color: #fff; background: linear-gradient(180deg, rgba(46,46,52,.94), rgba(8,8,10,.96)); }
     .actions { display: flex; align-items: center; gap: 8px; }
 
     .pop { display: none; transform: translate(-50%, -100%); animation: rise .2s var(--ease); }
@@ -172,12 +176,17 @@ function mountUi() {
   chipBtn.textContent = "הסתר";
   keepFocus(chipBtn);
   chipBtn.addEventListener("click", redactAll);
+  const pickBtn = document.createElement("button");
+  pickBtn.className = "cta ghost";
+  pickBtn.textContent = "בחר ידנית";
+  keepFocus(pickBtn);
+  pickBtn.addEventListener("click", togglePickMode);
   const restoreBtn = document.createElement("button");
   restoreBtn.className = "cta ghost";
   restoreBtn.textContent = "שחזר";
   keepFocus(restoreBtn);
   restoreBtn.addEventListener("click", restoreVisible);
-  actions.append(chipBtn, restoreBtn);
+  actions.append(chipBtn, pickBtn, restoreBtn);
   chip.append(dot, info, actions);
 
   const pop = document.createElement("div");
@@ -201,8 +210,51 @@ function mountUi() {
   shadow.append(style, chip, pop, toast);
   document.documentElement.appendChild(host);
 
-  return { chipLabel, chip, dot, chipBtn, restoreBtn, pop, popBtn, toast };
+  return { chipLabel, chip, dot, chipBtn, pickBtn, restoreBtn, pop, popBtn, toast };
 }
+
+// ---- click-to-hide: pick mode --------------------------------------------------------
+// When ON, a click on any word/number in a composer masks exactly that value in place (and every
+// repeat), instead of moving the caret. Toggle OFF to edit/send normally. Auto "הסתר" still works too.
+let pickMode = false;
+
+function togglePickMode() {
+  pickMode = !pickMode;
+  paintPickBtn();
+  document.documentElement.style.cursor = pickMode ? "crosshair" : "";
+  showToast(pickMode ? "מצב בחירה: לחצו על מילים להסתרה" : "מצב בחירה כבוי", "info");
+}
+
+function paintPickBtn() {
+  ui.pickBtn.textContent = pickMode ? "● בחירה פעילה" : "בחר ידנית";
+  ui.pickBtn.classList.toggle("active", pickMode);
+}
+
+document.addEventListener(
+  "mousedown",
+  (event) => {
+    if (!pickMode) {
+      return;
+    }
+    const editable = closestEditable(event.target as Node | null);
+    if (!editable) {
+      return; // click outside a composer (e.g. our own UI) — ignore
+    }
+    const word = wordAtPoint(event.clientX, event.clientY);
+    if (!word || word.trim().length === 0) {
+      return;
+    }
+    event.preventDefault(); // don't move the caret — we're masking, not editing
+    event.stopPropagation();
+    const { text, newRows } = session.redactManualValue(getText(editable), word);
+    if (newRows.length > 0) {
+      writeWithInstruction(editable, text, true);
+      showToast(`הוסתר: ${word}`);
+      updateChip();
+    }
+  },
+  true,
+);
 
 /** Stop a UI button from stealing focus / clearing the page selection when pressed. */
 function keepFocus(btn: HTMLElement) {
@@ -242,6 +294,15 @@ function setChipProtected(count: number) {
   ui.chipLabel.textContent = count > 0 ? `מוגן · ${count} הוסתרו` : "מוגן";
   ui.chipBtn.style.display = "none";
   ui.restoreBtn.style.display = "";
+  ui.chip.style.display = "flex";
+}
+
+/** Composer has text but nothing auto-detected — neutral dot, manual "בחר ידנית" still available. */
+function setChipIdle() {
+  ui.dot.className = "dot idle";
+  ui.chipLabel.textContent = "בחר מה להסתיר";
+  ui.chipBtn.style.display = "none";
+  ui.restoreBtn.style.display = session.hasKey ? "" : "none";
   ui.chip.style.display = "flex";
 }
 
@@ -341,6 +402,8 @@ function updateChip() {
     setChipPending();
   } else if (session.hasKey) {
     setChipProtected(0);
+  } else if (text.trim().length > 0) {
+    setChipIdle(); // text present, nothing auto-detected — still offer manual pick
   } else {
     hideChip();
   }

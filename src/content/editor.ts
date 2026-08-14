@@ -197,6 +197,46 @@ function wrapTokens(textNode: Text): void {
   textNode.parentNode?.replaceChild(fragment, textNode);
 }
 
+/** The whole word/number under a screen point (letters+digits run), or null. Used by click-to-hide:
+ *  the user clicks a value in the composer and we mask exactly that token. */
+export function wordAtPoint(x: number, y: number): string | null {
+  let node: Node | null = null;
+  let offset = 0;
+  const doc = document as Document & {
+    caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+  };
+  if (typeof document.caretRangeFromPoint === "function") {
+    const range = document.caretRangeFromPoint(x, y);
+    node = range?.startContainer ?? null;
+    offset = range?.startOffset ?? 0;
+  } else if (doc.caretPositionFromPoint) {
+    const pos = doc.caretPositionFromPoint(x, y);
+    node = pos?.offsetNode ?? null;
+    offset = pos?.offset ?? 0;
+  }
+  if (!node || node.nodeType !== Node.TEXT_NODE) {
+    return null;
+  }
+  const text = (node as Text).nodeValue ?? "";
+  const isWord = (ch: string) => /[\p{L}\p{N}]/u.test(ch);
+  let i = offset;
+  if (i >= text.length || !isWord(text[i])) {
+    i -= 1; // a click on the right edge lands one past the last char
+  }
+  if (i < 0 || !isWord(text[i])) {
+    return null;
+  }
+  let start = i;
+  let end = i + 1;
+  while (start > 0 && isWord(text[start - 1])) {
+    start -= 1;
+  }
+  while (end < text.length && isWord(text[end])) {
+    end += 1;
+  }
+  return text.slice(start, end);
+}
+
 export function closestEditable(node: Node | null): HTMLElement | null {
   let el: HTMLElement | null =
     node && node.nodeType === 1 ? (node as HTMLElement) : node?.parentElement ?? null;
