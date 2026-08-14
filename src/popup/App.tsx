@@ -1,7 +1,8 @@
 import { useCallback, useRef, useState } from "react";
 import type { KeyRow } from "@engine/types";
 import { anonymizeWith } from "@engine/pipeline";
-import { toKeyFile } from "@engine/key";
+import { fromKeyFile, toKeyFile } from "@engine/key";
+import { restore } from "@engine/restore";
 import { extractText, ACCEPTED } from "./extract";
 import { requestNer } from "../shared/ner";
 
@@ -49,7 +50,13 @@ export function App() {
   const [dragging, setDragging] = useState(false);
   const [copyState, setCopyState] = useState<"idle" | "ok" | "fail">("idle");
   const [keySaved, setKeySaved] = useState(false);
+  const [mode, setMode] = useState<"redact" | "restore">("redact");
+  const [answer, setAnswer] = useState("");
+  const [keyRows, setKeyRows] = useState<readonly KeyRow[] | null>(null);
+  const [restored, setRestored] = useState<string | null>(null);
+  const [restoreMsg, setRestoreMsg] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+  const keyInputRef = useRef<HTMLInputElement>(null);
 
   const copyRedacted = useCallback(async (text: string) => {
     try {
@@ -60,6 +67,30 @@ export function App() {
     }
     setTimeout(() => setCopyState("idle"), 1600);
   }, []);
+
+  const loadKeyFile = useCallback(async (file: File) => {
+    try {
+      setKeyRows(fromKeyFile(await file.text()));
+      setRestoreMsg(`מפתח נטען`);
+    } catch {
+      setKeyRows(null);
+      setRestoreMsg("קובץ מפתח לא תקין");
+    }
+  }, []);
+
+  const doRestore = useCallback(() => {
+    if (!keyRows) {
+      setRestoreMsg("טענו קודם קובץ מפתח");
+      return;
+    }
+    if (!answer.trim()) {
+      setRestoreMsg("הדביקו את תשובת ה-AI");
+      return;
+    }
+    const { restoredText, unmatched } = restore(answer, keyRows);
+    setRestored(restoredText);
+    setRestoreMsg(unmatched.length > 0 ? `שוחזר · ${unmatched.length} סימונים לא זוהו` : "שוחזר ✓");
+  }, [answer, keyRows]);
 
   const handleFile = useCallback(async (file: File) => {
     setStatus("working");
@@ -104,10 +135,30 @@ export function App() {
         <span className="text-[15px] font-bold tracking-tight" dir="ltr">
           MECHIKON
         </span>
-        <span className="text-[13px] text-zinc-400">· מיסוך קבצים</span>
       </header>
 
-      {status !== "done" && (
+      <div className="mb-4 inline-flex w-full rounded-2xl bg-zinc-100 p-1" role="group">
+        <button
+          type="button"
+          onClick={() => setMode("redact")}
+          className={`h-10 flex-1 rounded-xl text-[13px] font-semibold transition ${
+            mode === "redact" ? "bg-white text-ink shadow-sm" : "text-zinc-500"
+          }`}
+        >
+          מיסוך קובץ
+        </button>
+        <button
+          type="button"
+          onClick={() => setMode("restore")}
+          className={`h-10 flex-1 rounded-xl text-[13px] font-semibold transition ${
+            mode === "restore" ? "bg-white text-ink shadow-sm" : "text-zinc-500"
+          }`}
+        >
+          שחזור תשובה
+        </button>
+      </div>
+
+      {mode === "redact" && status !== "done" && (
         <div
           role="button"
           tabIndex={0}
@@ -123,7 +174,7 @@ export function App() {
           }}
           onDragLeave={() => setDragging(false)}
           onDrop={onDrop}
-          className={`flex min-h-[132px] cursor-pointer flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed p-6 text-center transition ${
+          className={`flex min-h-[140px] cursor-pointer flex-col items-center justify-center gap-2 rounded-3xl border-2 border-dashed p-6 text-center transition ${
             dragging ? "border-emerald-400 bg-emerald-50" : "border-zinc-200 hover:bg-zinc-50"
           }`}
         >
@@ -150,11 +201,11 @@ export function App() {
         </div>
       )}
 
-      {status === "error" && (
-        <p className="mt-3 rounded-xl bg-red-50 px-3 py-2 text-[13px] text-red-600">{error}</p>
+      {mode === "redact" && status === "error" && (
+        <p className="mt-3 rounded-2xl bg-red-50 px-3 py-2 text-[13px] text-red-600">{error}</p>
       )}
 
-      {status === "done" && result && (
+      {mode === "redact" && status === "done" && result && (
         <div className="flex flex-col gap-3">
           <div
             role="status"
@@ -168,7 +219,7 @@ export function App() {
             readOnly
             dir="auto"
             value={result.redacted}
-            className="h-40 w-full resize-none rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-[13px] leading-relaxed"
+            className="h-40 w-full resize-none rounded-2xl border border-zinc-200 bg-zinc-50 p-3 text-[13px] leading-relaxed"
           />
 
           <div className="flex flex-wrap gap-2">
@@ -225,6 +276,84 @@ export function App() {
           >
             קובץ נוסף
           </button>
+        </div>
+      )}
+
+      {mode === "restore" && (
+        <div className="flex flex-col gap-3">
+          <textarea
+            dir="auto"
+            value={answer}
+            onChange={(e) => setAnswer(e.target.value)}
+            placeholder="הדביקו כאן את תשובת ה-AI (עם הסימונים)…"
+            className="h-32 w-full resize-none rounded-2xl border border-zinc-200 bg-zinc-50 p-3 text-[13px] leading-relaxed placeholder:text-zinc-400"
+          />
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => keyInputRef.current?.click()}
+              className="h-11 rounded-full border border-zinc-200 px-4 text-sm font-semibold transition hover:bg-zinc-50"
+            >
+              {keyRows ? `מפתח נטען · ${keyRows.length}` : "טען קובץ מפתח"}
+            </button>
+            {result?.key && (
+              <button
+                type="button"
+                onClick={() => {
+                  setKeyRows(result.key);
+                  setRestoreMsg("מפתח נטען");
+                }}
+                className="h-11 rounded-full px-3 text-[13px] font-medium text-zinc-500 hover:text-ink"
+              >
+                השתמש במפתח האחרון
+              </button>
+            )}
+            <input
+              ref={keyInputRef}
+              type="file"
+              accept=".json"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) {
+                  void loadKeyFile(file);
+                }
+              }}
+            />
+          </div>
+
+          <button
+            type="button"
+            onClick={doRestore}
+            className="h-12 rounded-full bg-black px-4 text-sm font-semibold text-white transition hover:brightness-110"
+          >
+            שחזר את הערכים המקוריים
+          </button>
+
+          {restoreMsg && (
+            <p role="status" className="text-center text-[13px] font-medium text-zinc-500">
+              {restoreMsg}
+            </p>
+          )}
+
+          {restored !== null && (
+            <>
+              <textarea
+                readOnly
+                dir="auto"
+                value={restored}
+                className="h-40 w-full resize-none rounded-2xl border border-emerald-200 bg-emerald-50/50 p-3 text-[13px] leading-relaxed"
+              />
+              <button
+                type="button"
+                onClick={() => void copyRedacted(restored)}
+                className="h-12 rounded-full bg-black px-4 text-sm font-semibold text-white transition hover:brightness-110"
+              >
+                {copyState === "ok" ? "הועתק ✓" : "העתק טקסט משוחזר"}
+              </button>
+            </>
+          )}
         </div>
       )}
 
