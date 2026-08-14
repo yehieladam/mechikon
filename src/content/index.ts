@@ -8,8 +8,9 @@
  *
  * Deterministic only for now (instant, no model). NER (names/orgs) arrives later via an offscreen doc.
  */
-import { RedactSession } from "./session";
+import { RedactSession } from "../shared/session";
 import { requestNer } from "../shared/ner";
+import { INSTRUCTION, INSTRUCTION_MARKER } from "../shared/instruction";
 import {
   closestEditable,
   currentSelection,
@@ -23,14 +24,6 @@ import {
 
 const session = new RedactSession();
 let lastComposer: Composer | null = null;
-
-// Clearly SEPARATED from the user's message: a dashed rule delimits it. The rule survives even if the
-// editor collapses the newlines, so the note never blends into the message. Wording reassures the model
-// the text is ALREADY anonymized (no PII) so it answers normally instead of refusing; the digit-free
-// [סוג_מספר] example is untouched by the restore matcher (which needs [..._<digits>]).
-const INSTRUCTION =
-  "\n\n———————————————\n🔒 הנחיה ל-AI (מחיקון): הטקסט שמעל עבר אנונימיזציה ואינו מכיל מידע אישי אמיתי. הסימונים בסוגריים מרובעים (בתבנית [סוג_מספר], למשל שם או מספר) הם תחליפים אנונימיים — התייחס אליהם כאל ערכים רגילים, ענה על הבקשה כרגיל, והשאר כל סימון בתשובתך בדיוק כפי שהוא כדי שנוכל לשחזר.";
-const INSTRUCTION_MARKER = "הנחיה ל-AI (מחיקון)";
 
 // ---- UI (shadow DOM, immune to host page CSS) ---------------------------------------
 // The selection popover's current action, invoked on the button's mousedown (set in refreshPopover).
@@ -383,11 +376,14 @@ async function redactAll() {
 
   // Pass 2 — NER names/orgs. Detect on the pre-redaction text, then re-read the CURRENT composer and
   // mask the values still present there, so anything typed meanwhile is preserved (and also masked).
-  const nerSpans = await requestNer(original);
+  const ner = await requestNer(original);
+  if (ner.ok) {
+    nerReady = true; // a real response proves the model is up (covers the missed one-shot broadcast)
+  }
   if (!composer.isConnected) {
     return; // composer was swapped out (message sent) — don't touch a detached node
   }
-  const valued = nerSpans.map((span) => ({
+  const valued = ner.spans.map((span) => ({
     value: original.slice(span.start, span.end),
     type: span.type,
   }));
@@ -397,11 +393,12 @@ async function redactAll() {
     writeWithInstruction(composer, nerPass.text, true);
     showToast(`הוסתרו גם ${nerPass.newRows.length} שמות/ארגונים`);
   }
-  if (nerReady) {
+  // Only claim full protection when the model ACTUALLY ran (ner.ok). A timeout (ok=false) is NOT the
+  // same as "no names" — stay partly-protected so we never show a false green while names may be exposed.
+  if (ner.ok) {
     namesPending = false;
     setChipProtected(detPass.newRows.length + nerPass.newRows.length);
   }
-  // If the model isn't ready yet, stay "partly protected" until the user redacts again once it loads.
 }
 
 // ---- selection popover: manual redact / restore --------------------------------------

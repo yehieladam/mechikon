@@ -1,35 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { KeyRow } from "@engine/types";
-import { anonymizeManualOnly, anonymizeWith } from "@engine/pipeline";
 import { fromKeyFile, toKeyFile } from "@engine/key";
 import { restore } from "@engine/restore";
 import { extractText, ACCEPTED } from "./extract";
 import { requestNer } from "../shared/ner";
+import { RedactSession } from "../shared/session";
+import { withInstruction } from "../shared/instruction";
 
 type Status = "idle" | "working" | "picking" | "done" | "error";
 
 interface Result {
   readonly redacted: string;
-  readonly key: readonly KeyRow[];
   readonly baseName: string;
-}
-
-// Persist the last file's restore key so the "שחזור" tab is ready automatically in the same session
-// (survives closing/reopening the popup within 24h) — no need to re-load the key file by hand.
-const FILE_KEY = "fileKey.v1";
-const FILE_KEY_TTL = 24 * 60 * 60 * 1000;
-
-async function saveFileKey(rows: readonly KeyRow[]): Promise<void> {
-  await chrome.storage.local.set({ [FILE_KEY]: { rows, expiresAt: Date.now() + FILE_KEY_TTL } });
-}
-
-async function loadFileKey(): Promise<KeyRow[] | null> {
-  const bag = await chrome.storage.local.get(FILE_KEY);
-  const stored = bag[FILE_KEY] as { rows: KeyRow[]; expiresAt: number } | undefined;
-  if (!stored || stored.expiresAt <= Date.now()) {
-    return null;
-  }
-  return stored.rows;
+  readonly count: number;
 }
 
 function download(name: string, text: string, type: string): void {
@@ -78,23 +61,21 @@ export function App() {
   const [baseName, setBaseName] = useState("");
   const [terms, setTerms] = useState<string[]>([]);
   const [termInput, setTermInput] = useState("");
+  const [session] = useState(() => new RedactSession());
+  const [sessionReady, setSessionReady] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const keyInputRef = useRef<HTMLInputElement>(null);
   const previewRef = useRef<HTMLTextAreaElement>(null);
 
-  // Auto-load the last file's key so "שחזור" needs no manual key upload in the same session.
+  // The popup shares the ONE session key with the chat overlay (same chrome.storage). Hydrate it so
+  // restore is ready automatically and file tokens stay consistent with chat tokens.
   useEffect(() => {
-    void loadFileKey().then((rows) => {
-      if (rows) {
-        setKeyRows(rows);
-      }
-    });
-  }, []);
+    void session.hydrate().then(() => setSessionReady(session.hasKey));
+  }, [session]);
 
-  const finishRedact = useCallback((redacted: string, key: readonly KeyRow[], base: string) => {
-    setResult({ redacted, key, baseName: base });
-    setKeyRows(key); // restore tab is immediately ready
-    void saveFileKey(key);
+  const finishRedact = useCallback((redacted: string, base: string, count: number) => {
+    setResult({ redacted: withInstruction(redacted), baseName: base, count });
+    setSessionReady(true);
     setKeySaved(false);
     setStatus("done");
   }, []);
@@ -115,9 +96,9 @@ export function App() {
   }, [addTerm]);
 
   const doManualRedact = useCallback(() => {
-    const { anonymizedText, key } = anonymizeManualOnly(extracted, terms);
-    finishRedact(anonymizedText, key, baseName);
-  }, [extracted, terms, baseName, finishRedact]);
+    const { text, newRows } = session.redactManualTerms(extracted, terms);
+    finishRedact(text, baseName, newRows.length);
+  }, [session, extracted, terms, baseName, finishRedact]);
 
   const copyRedacted = useCallback(async (text: string) => {
     try {
@@ -140,18 +121,24 @@ export function App() {
   }, []);
 
   const doRestore = useCallback(() => {
-    if (!keyRows) {
-      setRestoreMsg("טענו קודם קובץ מפתח");
-      return;
-    }
     if (!answer.trim()) {
       setRestoreMsg("הדביקו את תשובת ה-AI");
       return;
     }
-    const { restoredText, unmatched } = restore(answer, keyRows);
+    if (!keyRows && !session.hasKey) {
+      setRestoreMsg("אין מפתח — טענו קובץ מפתח או מסכו קודם");
+      return;
+    }
+    // Uploaded key (other device / old file) wins; otherwise the shared session key (auto-loaded).
+    const { restoredText, unmatched } = keyRows
+      ? restore(answer, keyRows)
+      : (() => {
+          const r = session.restore(answer);
+          return { restoredText: r.text, unmatched: r.unmatched };
+        })();
     setRestored(restoredText);
     setRestoreMsg(unmatched.length > 0 ? `שוחזר · ${unmatched.length} סימונים לא זוהו` : "שוחזר ✓");
-  }, [answer, keyRows]);
+  }, [answer, keyRows, session]);
 
   const handleFile = useCallback(
     async (file: File) => {
@@ -173,15 +160,15 @@ export function App() {
           setStatus("picking");
           return;
         }
-        const nerSpans = await requestNer(text);
-        const { anonymizedText, key } = anonymizeWith(text, nerSpans);
-        finishRedact(anonymizedText, key, base);
+        const ner = await requestNer(text);
+        const { text: redacted, newRows } = session.redact(text, ner.spans);
+        finishRedact(redacted, base, newRows.length);
       } catch (err) {
         setError(friendlyError(err instanceof Error ? err.message : String(err), file.name));
         setStatus("error");
       }
     },
-    [redactMode, finishRedact],
+    [session, redactMode, finishRedact],
   );
 
   const onDrop = useCallback(
@@ -307,7 +294,7 @@ export function App() {
             className="flex items-center gap-2 rounded-xl bg-emerald-50 px-3 py-2 text-[13px] font-medium text-emerald-700"
           >
             <span className="h-2 w-2 rounded-full bg-emerald-500" />
-            הוסתרו {result.key.length} פרטים — מוכן לשליחה ל-AI
+            הוסתרו {result.count} פרטים — מוכן לשליחה ל-AI
           </div>
 
           <textarea
@@ -346,7 +333,7 @@ export function App() {
               onClick={() => {
                 download(
                   `${result.baseName}-מפתח-שחזור.json`,
-                  toKeyFile(result.key),
+                  toKeyFile(session.rows),
                   "application/json;charset=utf-8",
                 );
                 setKeySaved(true);
@@ -460,10 +447,10 @@ export function App() {
           />
 
           <div className="flex flex-wrap items-center gap-2">
-            {keyRows ? (
+            {keyRows || sessionReady ? (
               <span className="inline-flex h-11 items-center gap-2 rounded-full bg-emerald-50 px-4 text-[13px] font-semibold text-emerald-700">
                 <span className="h-2 w-2 rounded-full bg-emerald-500" />
-                מפתח הסשן טעון · {keyRows.length}
+                מפתח טעון · {keyRows ? keyRows.length : session.rows.length}
               </span>
             ) : null}
             <button
@@ -471,7 +458,7 @@ export function App() {
               onClick={() => keyInputRef.current?.click()}
               className="h-11 rounded-full border border-zinc-200 px-4 text-[13px] font-semibold transition hover:bg-zinc-50"
             >
-              {keyRows ? "טען מפתח אחר" : "טען קובץ מפתח"}
+              {keyRows || sessionReady ? "טען מפתח אחר" : "טען קובץ מפתח"}
             </button>
             <input
               ref={keyInputRef}
