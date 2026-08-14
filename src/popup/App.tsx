@@ -281,7 +281,7 @@ export function App() {
   return (
     <main
       dir="rtl"
-      className="w-[380px] bg-white p-5 text-ink"
+      className="w-[380px] rounded-[24px] bg-white p-5 text-ink"
       style={{ fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" }}
     >
       <header className="mb-4 flex items-center gap-2">
@@ -417,7 +417,18 @@ export function App() {
             </button>
           </div>
 
-          <div className="rounded-2xl border border-amber-300 bg-amber-50/60 p-3">
+          <div className="flex items-center justify-between pt-1">
+            <button
+              type="button"
+              onClick={() => {
+                setStatus("idle");
+                setResult(null);
+                setKeySaved(false);
+              }}
+              className="text-[13px] font-medium text-zinc-400 hover:text-ink"
+            >
+              קובץ נוסף
+            </button>
             <button
               type="button"
               onClick={() => {
@@ -428,26 +439,12 @@ export function App() {
                 );
                 setKeySaved(true);
               }}
-              className="h-11 w-full rounded-full bg-amber-500 px-4 text-sm font-semibold text-white transition hover:brightness-110"
+              className="text-[12px] font-medium text-zinc-400 hover:text-ink"
+              title="השחזור באותו מחשב אוטומטי; הקובץ נחוץ רק כדי לשחזר במחשב אחר"
             >
-              {keySaved ? "מפתח נשמר ✓" : "הורד מפתח שחזור"}
+              {keySaved ? "מפתח נשמר ✓" : "מפתח לשחזור במחשב אחר"}
             </button>
-            <p className="mt-2 text-center text-[12px] font-medium text-amber-700">
-              בלי הקובץ הזה לא ניתן לשחזר את המידע בהמשך
-            </p>
           </div>
-
-          <button
-            type="button"
-            onClick={() => {
-              setStatus("idle");
-              setResult(null);
-              setKeySaved(false);
-            }}
-            className="text-[13px] font-medium text-zinc-400 hover:text-ink"
-          >
-            קובץ נוסף
-          </button>
         </div>
       )}
 
@@ -570,7 +567,7 @@ export function App() {
       )}
 
       <p className="mt-4 text-[11px] leading-relaxed text-zinc-400">
-        המידע הרגיש לא עוזב את הדפדפן. שמרו את מפתח השחזור כדי להחזיר את הערכים המקוריים בהמשך.
+        המידע הרגיש לא עוזב את הדפדפן. השחזור זמין אוטומטית בלשונית "שחזור תשובה".
       </p>
     </main>
   );

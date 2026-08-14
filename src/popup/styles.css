@@ -1,3 +1,14 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* A thin neutral gutter around the content so the white card reads as a rounded panel
+   (the popup window's own corners are square/OS-drawn). */
+html,
+body {
+  margin: 0;
+}
+body {
+  padding: 8px;
+  background: #ececef;
+}
