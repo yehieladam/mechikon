@@ -101,6 +101,31 @@ test("chip renders and pick-mode + popover mask across the whole composer", asyn
   expect(errors, "no uncaught content-script errors").toEqual([]);
 });
 
+test("UI language follows the text: English draft -> English chip + English instruction", async ({
+  context,
+}) => {
+  const page = context.pages()[0] ?? (await context.newPage());
+  await page.goto(FIXTURE);
+  // Replace the Hebrew draft with an English one, then focus so the chip re-detects the language.
+  await page.$eval(
+    "#composer",
+    (el) => (el.textContent = "Hello, my name is John Smith and my client is Jane Doe."),
+  );
+  await page.click("#composer");
+  await expect(page.locator(".chip")).toBeVisible({ timeout: 5000 });
+
+  // Chip labels are English (the button reads "Select manually", not "בחר ידנית").
+  await expect(page.getByRole("button", { name: "Select manually" })).toBeVisible();
+
+  // Hide a word manually; the appended AI instruction must be the ENGLISH one.
+  await page.getByRole("button", { name: "Select manually" }).click();
+  await clickWord(page, "John");
+  await expect.poll(() => composerText(page)).not.toContain("John");
+  const text = await composerText(page);
+  expect(text).toContain("Note to the AI (Mechikon)"); // English instruction
+  expect(text).not.toContain("הנחיה ל-AI"); // not the Hebrew one
+});
+
 test("re-masking a value already in the key still writes (repeat-value guard)", async ({ context }) => {
   const page = context.pages()[0] ?? (await context.newPage());
   const original =

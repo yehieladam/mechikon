@@ -11,6 +11,7 @@
 import { RedactSession } from "../shared/session";
 import { requestNer } from "../shared/ner";
 import { withInstruction as buildWithInstruction } from "../shared/instruction";
+import { defaultLang, detectLang, t, type Lang } from "../shared/i18n";
 import {
   closestEditable,
   currentSelection,
@@ -25,6 +26,9 @@ import {
 
 const session = new RedactSession();
 let lastComposer: Composer | null = null;
+// The UI language FOLLOWS THE TEXT the user is writing (Hebrew vs Latin), falling back to the browser
+// language when the composer is empty. Recomputed in updateChip; applied to labels + text direction.
+let uiLang: Lang = defaultLang();
 // These are used by makeDraggable, which mountUi() calls at module load — so they MUST be declared
 // before that call, or accessing them hits the `let`/`const` temporal dead zone and the whole content
 // script throws at load (a runtime error tsc/build do not catch).
@@ -58,7 +62,8 @@ function mountUi() {
       --ease: cubic-bezier(.22,.9,.3,1);
     }
     * { box-sizing: border-box; }
-    .chip, .pop, .toast { position: fixed; z-index: 2147483647; direction: rtl; font-family: var(--font); }
+    /* text direction is set inline per UI language (Hebrew=rtl, English=ltr) — see applyLang(). */
+    .chip, .pop, .toast { position: fixed; z-index: 2147483647; font-family: var(--font); }
     button { font-family: var(--font); cursor: pointer; border: 0; -webkit-font-smoothing: antialiased; }
 
     /* Pinned bottom-LEFT explicitly (inset-inline-start resolves to the RIGHT under dir:rtl, where the
@@ -181,17 +186,17 @@ function mountUi() {
   actions.className = "actions";
   const chipBtn = document.createElement("button");
   chipBtn.className = "cta";
-  chipBtn.textContent = "הסתר";
+  chipBtn.textContent = t(uiLang, "btnHide");
   keepFocus(chipBtn);
   chipBtn.addEventListener("click", redactAll);
   const pickBtn = document.createElement("button");
   pickBtn.className = "cta ghost";
-  pickBtn.textContent = "בחר ידנית";
+  pickBtn.textContent = t(uiLang, "btnPick");
   keepFocus(pickBtn);
   pickBtn.addEventListener("click", togglePickMode);
   const restoreBtn = document.createElement("button");
   restoreBtn.className = "cta ghost";
-  restoreBtn.textContent = "שחזר";
+  restoreBtn.textContent = t(uiLang, "btnRestore");
   keepFocus(restoreBtn);
   restoreBtn.addEventListener("click", restoreVisible);
   actions.append(chipBtn, pickBtn, restoreBtn);
@@ -326,7 +331,7 @@ function enterPickMode() {
   pickMode = true;
   document.documentElement.style.cursor = "crosshair";
   paintPickBtn();
-  showToast("מצב בחירה: לחצו על מילים להסתרה (Esc ליציאה)", "info");
+  showToast(t(uiLang, "pickModeToast"), "info");
 }
 
 /** Always safe to call — leaves the mode and restores the cursor so it can't get stuck globally
@@ -351,8 +356,21 @@ document.addEventListener(
 );
 
 function paintPickBtn() {
-  ui.pickBtn.textContent = pickMode ? "● בחירה פעילה" : "בחר ידנית";
+  ui.pickBtn.textContent = pickMode ? t(uiLang, "pickActive") : t(uiLang, "btnPick");
   ui.pickBtn.classList.toggle("active", pickMode);
+}
+
+/** Apply the UI language: button labels + text direction (Hebrew rtl / English ltr). Called from
+ *  updateChip whenever the detected language of the composer text changes. */
+function applyLang(lang: Lang) {
+  uiLang = lang;
+  const dir = lang === "he" ? "rtl" : "ltr";
+  ui.chip.style.direction = dir;
+  ui.pop.style.direction = dir;
+  ui.toast.style.direction = dir;
+  ui.chipBtn.textContent = t(lang, "btnHide");
+  ui.restoreBtn.textContent = t(lang, "btnRestore");
+  paintPickBtn();
 }
 
 document.addEventListener(
@@ -378,10 +396,10 @@ document.addEventListener(
     // composer still needs the substitution, or the click looks like it did nothing.
     if (text !== src) {
       writeWithInstruction(editable, text, true);
-      showToast(`הוסתר: ${word}`);
+      showToast(t(uiLang, "hiddenValue", { v: word }));
       updateChip();
     } else {
-      showToast(`לא נמצא "${word}" להסתרה`, "info");
+      showToast(t(uiLang, "notFoundToHide", { v: word }), "info");
     }
   },
   true,
@@ -403,7 +421,7 @@ function showToast(text: string, kind: ToastKind = "ok") {
 /** Sensitive values found but not yet redacted: amber pulsing dot + count + הסתר (and שחזר if a key exists). */
 function setChipDetected(count: number) {
   ui.dot.className = "dot detected";
-  ui.chipLabel.textContent = `${count} פרטים רגישים`;
+  ui.chipLabel.textContent = t(uiLang, "detectedCount", { n: count });
   ui.chipBtn.style.display = "";
   ui.restoreBtn.style.display = session.hasKey ? "" : "none";
   ui.chip.style.display = "flex";
@@ -413,7 +431,7 @@ function setChipDetected(count: number) {
  *  spinning green dot + "masking names…" — never a full "safe" claim while a name may be exposed. */
 function setChipPending() {
   ui.dot.className = "dot pending";
-  ui.chipLabel.textContent = "מסתיר שמות…";
+  ui.chipLabel.textContent = t(uiLang, "maskingNames");
   ui.chipBtn.style.display = "none";
   ui.restoreBtn.style.display = session.hasKey ? "" : "none";
   ui.chip.style.display = "flex";
@@ -422,7 +440,8 @@ function setChipPending() {
 /** Everything redacted (incl. names, model was ready): green check dot, only שחזר. */
 function setChipProtected(count: number) {
   ui.dot.className = "dot green";
-  ui.chipLabel.textContent = count > 0 ? `מוגן · ${count} הוסתרו` : "מוגן";
+  ui.chipLabel.textContent =
+    count > 0 ? t(uiLang, "protectedCount", { n: count }) : t(uiLang, "protectedLabel");
   ui.chipBtn.style.display = "none";
   ui.restoreBtn.style.display = "";
   ui.chip.style.display = "flex";
@@ -431,7 +450,7 @@ function setChipProtected(count: number) {
 /** Composer has text but nothing auto-detected — neutral dot, manual "בחר ידנית" still available. */
 function setChipIdle() {
   ui.dot.className = "dot idle";
-  ui.chipLabel.textContent = "בחר מה להסתיר";
+  ui.chipLabel.textContent = t(uiLang, "pickWhat");
   ui.chipBtn.style.display = "none";
   ui.restoreBtn.style.display = session.hasKey ? "" : "none";
   ui.chip.style.display = "flex";
@@ -445,7 +464,7 @@ function hideChip() {
  *  in place. Skips the composer and script/style. Robust across sites (no per-site selectors). */
 function restoreVisible() {
   if (!session.hasKey) {
-    showToast("אין מה לשחזר עדיין — קודם הסתירו פרטים", "error");
+    showToast(t(uiLang, "nothingToRestore"), "error");
     return;
   }
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
@@ -478,7 +497,7 @@ function restoreVisible() {
     }
   }
   showToast(
-    changed > 0 ? `שוחזר ב-${changed} מקומות` : "לא נמצאו סימונים לשחזור בעמוד",
+    changed > 0 ? t(uiLang, "restoredPlaces", { n: changed }) : t(uiLang, "noTokensOnPage"),
     changed > 0 ? "ok" : "error",
   );
 }
@@ -549,6 +568,8 @@ let namesPending = false;
 function updateChip() {
   const composer = activeComposer();
   const text = composer ? getText(composer) : "";
+  // UI language follows the composer text (falls back to browser language when empty).
+  applyLang(detectLang(text, defaultLang()));
   const distinct = composer
     ? new Set(session.detect(text).map((s) => text.slice(s.start, s.end)))
     : new Set<string>();
@@ -570,7 +591,11 @@ function updateChip() {
 }
 
 function writeWithInstruction(composer: Composer, redacted: string, addInstruction: boolean) {
-  const out = addInstruction ? buildWithInstruction(redacted) : redacted;
+  // The instruction matches the TEXT's language (so an English draft gets the English note), not the
+  // chip's — usually the same, but the text is the source of truth for what the AI will read.
+  const out = addInstruction
+    ? buildWithInstruction(redacted, detectLang(redacted, uiLang))
+    : redacted;
   setWholeText(composer, out);
   highlightTokens(composer); // paint the [TOKEN_n] chips green so the user sees what was masked
 }
@@ -591,8 +616,8 @@ async function redactAll() {
   setChipPending();
   showToast(
     detPass.newRows.length > 0
-      ? `הוסתרו ${detPass.newRows.length} פרטים · נוספה הנחיה`
-      : "נסרק — ממתין לזיהוי שמות",
+      ? t(uiLang, "hiddenWithInstruction", { n: detPass.newRows.length })
+      : t(uiLang, "scannedWaitingNames"),
     detPass.newRows.length > 0 ? "ok" : "info",
   );
 
@@ -613,7 +638,7 @@ async function redactAll() {
   const nerPass = session.redactNerValues(current, valued);
   if (nerPass.newRows.length > 0) {
     writeWithInstruction(composer, nerPass.text, true);
-    showToast(`הוסתרו גם ${nerPass.newRows.length} שמות/ארגונים`);
+    showToast(t(uiLang, "alsoHidNames", { n: nerPass.newRows.length }));
   }
   // Only claim full protection when the model ACTUALLY ran (ner.ok). A timeout (ok=false) is NOT the
   // same as "no names" — stay partly-protected so we never show a false green while names may be exposed.
@@ -635,14 +660,14 @@ function refreshPopover() {
   }
   if (ctx.inEditable) {
     const value = ctx.value.trim();
-    ui.popBtn.textContent = "הסתר בחירה";
+    ui.popBtn.textContent = t(uiLang, "popHide");
     popAction = () => {
       ui.pop.style.display = "none";
       // Operate on the exact element the selection is in (not whatever is "focused") so the value is
       // always found and replaced in the right place.
       const composer = ctx.el;
       if (!composer || !composer.isConnected || value.length === 0) {
-        showToast("לא ניתן להסתיר את הבחירה", "error");
+        showToast(t(uiLang, "cannotHideSelection"), "error");
         return;
       }
       // Mask ONLY the selected value — not a full auto-redact of the whole message. Write whenever the
@@ -651,20 +676,22 @@ function refreshPopover() {
       const { text } = session.redactManualValue(src, value);
       if (text !== src) {
         writeWithInstruction(composer, text, true);
-        showToast(`הוסתר: ${value}`);
+        showToast(t(uiLang, "hiddenValue", { v: value }));
       } else {
-        showToast(`לא נמצא "${value}" בתיבה`, "error");
+        showToast(t(uiLang, "notFoundInBox", { v: value }), "error");
       }
       updateChip();
     };
   } else if (session.hasKey) {
-    ui.popBtn.textContent = "שחזר בחירה";
+    ui.popBtn.textContent = t(uiLang, "popRestore");
     popAction = () => {
       const { text, unmatched } = session.restore(ctx.value);
       replaceSelection(text);
       ui.pop.style.display = "none";
       showToast(
-        unmatched.length > 0 ? `שוחזר — ${unmatched.length} סימונים לא זוהו` : "שוחזר",
+        unmatched.length > 0
+          ? t(uiLang, "restoredUnmatched", { n: unmatched.length })
+          : t(uiLang, "restored"),
         unmatched.length > 0 ? "info" : "ok",
       );
     };
@@ -684,7 +711,7 @@ let nerReady = false;
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg?.type === "ner:ready" && !nerReady) {
     nerReady = true;
-    showToast("מנוע זיהוי השמות מוכן — הסתירו שוב לזיהוי שמות, ארגונים ומקומות");
+    showToast(t(uiLang, "nerReady"));
   }
 });
 

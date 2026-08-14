@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyRow } from "@engine/types";
 import { fromKeyFile, toKeyFile } from "@engine/key";
 import { restore } from "@engine/restore";
@@ -6,6 +6,7 @@ import { extractText, ACCEPTED } from "./extract";
 import { requestNer } from "../shared/ner";
 import { RedactSession } from "../shared/session";
 import { withInstruction } from "../shared/instruction";
+import { defaultLang, detectLang, t, type Lang } from "../shared/i18n";
 
 type Status = "idle" | "working" | "picking" | "done" | "error";
 
@@ -31,22 +32,30 @@ function download(name: string, text: string, type: string): void {
   }, 1500);
 }
 
-function friendlyError(message: string, fileName: string): string {
+function friendlyError(message: string, fileName: string, lang: Lang): string {
   if (message === "empty") {
-    return "לא נמצא טקסט בקובץ (ייתכן PDF סרוק — נסו את האתר)";
+    return t(lang, "noTextInFile");
   }
   if (message.startsWith(".")) {
-    return `סוג קובץ לא נתמך (${message}). נתמכים: PDF, Word, טקסט`;
+    return t(lang, "unsupportedType", { message });
   }
   if (fileName.toLowerCase().endsWith(".pdf")) {
-    return "לא ניתן לקרוא את ה-PDF כאן (ייתכן שהוא סרוק או מוגן) — נסו את האתר";
+    return t(lang, "pdfUnreadable");
   }
-  return "שגיאה בעיבוד הקובץ";
+  return t(lang, "fileProcessError");
 }
 
 /** Read-only text with a floating copy icon in the corner (like every AI chat), so copying never
  *  needs scrolling to a button below the box. */
-function CopyableText({ value, tone = "plain" }: { value: string; tone?: "plain" | "ok" }) {
+function CopyableText({
+  value,
+  lang,
+  tone = "plain",
+}: {
+  value: string;
+  lang: Lang;
+  tone?: "plain" | "ok";
+}) {
   const [copied, setCopied] = useState(false);
   const copy = async () => {
     try {
@@ -69,7 +78,7 @@ function CopyableText({ value, tone = "plain" }: { value: string; tone?: "plain"
       <button
         type="button"
         onClick={copy}
-        aria-label="העתק"
+        aria-label={t(lang, "copy")}
         className="absolute left-2.5 top-2.5 flex h-9 w-9 items-center justify-center rounded-full border border-zinc-200 bg-white/90 text-zinc-600 shadow-sm transition hover:text-ink"
       >
         {copied ? (
@@ -165,6 +174,17 @@ export function App() {
   const inputRef = useRef<HTMLInputElement>(null);
   const keyInputRef = useRef<HTMLInputElement>(null);
 
+  // The popup language FOLLOWS THE TEXT the user is working with (pasted answer in restore mode; the
+  // extracted/redacted text in mask mode), falling back to the browser language when there's none yet.
+  const lang = useMemo<Lang>(() => {
+    const sample = mode === "restore" ? answer : extracted || result?.redacted || "";
+    return detectLang(sample, defaultLang());
+  }, [mode, answer, extracted, result]);
+  const dir = lang === "he" ? "rtl" : "ltr";
+  // A live ref so event-handler callbacks read the CURRENT language without listing it as a dep.
+  const langRef = useRef(lang);
+  langRef.current = lang;
+
   // The popup shares the ONE session key with the chat overlay (same chrome.storage). Hydrate it so
   // restore is ready automatically and file tokens stay consistent with chat tokens.
   useEffect(() => {
@@ -176,7 +196,7 @@ export function App() {
       // Count DISTINCT masks actually in the output (not only newly minted rows) — a value already in
       // the shared key still appears as a token, so newRows can be 0 while the text is masked.
       const count = new Set(redacted.match(/\[[^[\]]+_\d+\]/g) ?? []).size;
-      setResult({ redacted: withInstruction(redacted), baseName: base, count });
+      setResult({ redacted: withInstruction(redacted, langRef.current), baseName: base, count });
       setSessionReady(session.hasKey);
       setKeySaved(false);
       setStatus("done");
@@ -214,20 +234,20 @@ export function App() {
   const loadKeyFile = useCallback(async (file: File) => {
     try {
       setKeyRows(fromKeyFile(await file.text()));
-      setRestoreMsg(`מפתח נטען`);
+      setRestoreMsg(t(langRef.current, "keyLoaded"));
     } catch {
       setKeyRows(null);
-      setRestoreMsg("קובץ מפתח לא תקין");
+      setRestoreMsg(t(langRef.current, "invalidKeyFile"));
     }
   }, []);
 
   const doRestore = useCallback(() => {
     if (!answer.trim()) {
-      setRestoreMsg("הדביקו את תשובת ה-AI");
+      setRestoreMsg(t(langRef.current, "pasteAiAnswer"));
       return;
     }
     if (!keyRows && !session.hasKey) {
-      setRestoreMsg("אין מפתח — טענו קובץ מפתח או מסכו קודם");
+      setRestoreMsg(t(langRef.current, "noKeyLoadOrMask"));
       return;
     }
     // Uploaded key (other device / old file) wins; otherwise the shared session key (auto-loaded).
@@ -238,7 +258,11 @@ export function App() {
           return { restoredText: r.text, unmatched: r.unmatched };
         })();
     setRestored(restoredText);
-    setRestoreMsg(unmatched.length > 0 ? `שוחזר · ${unmatched.length} סימונים לא זוהו` : "שוחזר ✓");
+    setRestoreMsg(
+      unmatched.length > 0
+        ? t(langRef.current, "restoredUnmatchedDot", { n: unmatched.length })
+        : t(langRef.current, "restoredCheck"),
+    );
   }, [answer, keyRows, session]);
 
   const handleFile = useCallback(
@@ -265,7 +289,9 @@ export function App() {
         const { text: redacted } = session.redact(text, ner.spans);
         finishRedact(redacted, base);
       } catch (err) {
-        setError(friendlyError(err instanceof Error ? err.message : String(err), file.name));
+        setError(
+          friendlyError(err instanceof Error ? err.message : String(err), file.name, langRef.current),
+        );
         setStatus("error");
       }
     },
@@ -286,7 +312,7 @@ export function App() {
 
   return (
     <main
-      dir="rtl"
+      dir={dir}
       className="w-[380px] rounded-[24px] bg-white p-5 text-ink"
       style={{ fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" }}
     >
@@ -304,7 +330,7 @@ export function App() {
             mode === "redact" ? "bg-white text-ink shadow-sm" : "text-zinc-500"
           }`}
         >
-          מיסוך קובץ
+          {t(lang, "fileMaskMode")}
         </button>
         <button
           type="button"
@@ -313,13 +339,13 @@ export function App() {
             mode === "restore" ? "bg-white text-ink shadow-sm" : "text-zinc-500"
           }`}
         >
-          שחזור תשובה
+          {t(lang, "restoreAnswer")}
         </button>
       </div>
 
       {mode === "redact" && status !== "done" && status !== "picking" && (
         <div className="mb-3 flex items-center gap-2 text-[13px]" role="group">
-          <span className="text-zinc-400">זיהוי:</span>
+          <span className="text-zinc-400">{t(lang, "detectionLabel")}</span>
           <button
             type="button"
             onClick={() => setRedactMode("auto")}
@@ -327,7 +353,7 @@ export function App() {
               redactMode === "auto" ? "bg-ink text-white" : "text-zinc-500 hover:text-ink"
             }`}
           >
-            אוטומטי
+            {t(lang, "autoMode")}
           </button>
           <button
             type="button"
@@ -336,7 +362,7 @@ export function App() {
               redactMode === "manual" ? "bg-ink text-white" : "text-zinc-500 hover:text-ink"
             }`}
           >
-            ידני
+            {t(lang, "manualMode")}
           </button>
         </div>
       )}
@@ -362,11 +388,11 @@ export function App() {
           }`}
         >
           {status === "working" ? (
-            <span className="text-sm font-medium text-zinc-500">מעבד…</span>
+            <span className="text-sm font-medium text-zinc-500">{t(lang, "processing")}</span>
           ) : (
             <>
-              <span className="text-sm font-semibold">גררו קובץ לכאן או לחצו לבחירה</span>
-              <span className="text-xs text-zinc-400">PDF · Word · טקסט — הכול נשאר במכשיר</span>
+              <span className="text-sm font-semibold">{t(lang, "dropHere")}</span>
+              <span className="text-xs text-zinc-400">{t(lang, "dropTypes")}</span>
             </>
           )}
           <input
@@ -395,10 +421,10 @@ export function App() {
             className="flex items-center gap-2 rounded-xl bg-emerald-50 px-3 py-2 text-[13px] font-medium text-emerald-700"
           >
             <span className="h-2 w-2 rounded-full bg-emerald-500" />
-            הוסתרו {result.count} פרטים — מוכן לשליחה ל-AI
+            {t(lang, "redactedReady", { n: result.count })}
           </div>
 
-          <CopyableText value={result.redacted} />
+          <CopyableText value={result.redacted} lang={lang} />
 
           <div className="flex flex-wrap gap-2">
             <button
@@ -407,19 +433,23 @@ export function App() {
               className="h-11 flex-1 rounded-full bg-black px-4 text-sm font-semibold text-white transition hover:brightness-110"
             >
               {copyState === "ok"
-                ? "הועתק ✓"
+                ? t(lang, "copiedCheck")
                 : copyState === "fail"
-                  ? "ההעתקה נכשלה — סמנו ידנית"
-                  : "העתק טקסט מוסתר"}
+                  ? t(lang, "copyFailed")
+                  : t(lang, "copyMaskedText")}
             </button>
             <button
               type="button"
               onClick={() =>
-                download(`${result.baseName}-מוסתר.txt`, result.redacted, "text/plain;charset=utf-8")
+                download(
+                  t(lang, "maskedFileName", { baseName: result.baseName }),
+                  result.redacted,
+                  "text/plain;charset=utf-8",
+                )
               }
               className="h-11 rounded-full border border-zinc-200 px-4 text-sm font-semibold transition hover:bg-zinc-50"
             >
-              הורד .txt
+              {t(lang, "downloadTxt")}
             </button>
           </div>
 
@@ -433,22 +463,22 @@ export function App() {
               }}
               className="text-[13px] font-medium text-zinc-400 hover:text-ink"
             >
-              קובץ נוסף
+              {t(lang, "anotherFile")}
             </button>
             <button
               type="button"
               onClick={() => {
                 download(
-                  `${result.baseName}-מפתח-שחזור.json`,
+                  t(lang, "keyFileName", { baseName: result.baseName }),
                   toKeyFile(session.rows),
                   "application/json;charset=utf-8",
                 );
                 setKeySaved(true);
               }}
               className="text-[12px] font-medium text-zinc-400 hover:text-ink"
-              title="השחזור באותו מחשב אוטומטי; הקובץ נחוץ רק כדי לשחזר במחשב אחר"
+              title={t(lang, "sameComputerAuto")}
             >
-              {keySaved ? "מפתח נשמר ✓" : "מפתח לשחזור במחשב אחר"}
+              {keySaved ? t(lang, "keySaved") : t(lang, "keyForOtherComputer")}
             </button>
           </div>
         </div>
@@ -456,9 +486,7 @@ export function App() {
 
       {mode === "redact" && status === "picking" && (
         <div className="flex flex-col gap-3">
-          <p className="text-[13px] text-zinc-500">
-            לחצו על מספר או שם כדי להסתיר אותו (וכל החזרות שלו). או הקלידו מונח.
-          </p>
+          <p className="text-[13px] text-zinc-500">{t(lang, "pickHint")}</p>
           <ClickablePreview text={extracted} terms={terms} onToggle={toggleTerm} />
           <div className="flex gap-2">
             <input
@@ -469,7 +497,7 @@ export function App() {
                   addTerm(termInput);
                 }
               }}
-              placeholder="מונח להסתרה…"
+              placeholder={t(lang, "termToHide")}
               className="h-11 flex-1 rounded-full border border-zinc-200 px-4 text-[13px] placeholder:text-zinc-400"
             />
             <button
@@ -477,19 +505,19 @@ export function App() {
               onClick={() => addTerm(termInput)}
               className="h-11 rounded-full bg-ink px-4 text-[13px] font-semibold text-white"
             >
-              הוסף
+              {t(lang, "addTermBtn")}
             </button>
           </div>
           {terms.length > 0 && (
             <div className="flex flex-wrap gap-2">
-              {terms.map((t) => (
+              {terms.map((term) => (
                 <button
-                  key={t}
+                  key={term}
                   type="button"
-                  onClick={() => setTerms((prev) => prev.filter((x) => x !== t))}
+                  onClick={() => setTerms((prev) => prev.filter((x) => x !== term))}
                   className="rounded-full bg-emerald-100 px-3 py-1 text-[12px] font-medium text-emerald-800"
                 >
-                  {t} ✕
+                  {term} ✕
                 </button>
               ))}
             </div>
@@ -500,7 +528,7 @@ export function App() {
             onClick={doManualRedact}
             className="h-12 rounded-full bg-black px-4 text-sm font-semibold text-white transition hover:brightness-110 disabled:opacity-40"
           >
-            הסתר {terms.length} מונחים
+            {t(lang, "hideNTerms", { n: terms.length })}
           </button>
           <button
             type="button"
@@ -511,7 +539,7 @@ export function App() {
             }}
             className="text-[13px] font-medium text-zinc-400 hover:text-ink"
           >
-            ביטול
+            {t(lang, "cancel")}
           </button>
         </div>
       )}
@@ -522,7 +550,7 @@ export function App() {
             dir="auto"
             value={answer}
             onChange={(e) => setAnswer(e.target.value)}
-            placeholder="הדביקו כאן את תשובת ה-AI (עם הסימונים)…"
+            placeholder={t(lang, "pastePlaceholder")}
             className="h-28 w-full resize-none rounded-3xl border border-zinc-200 bg-zinc-50 p-4 text-[13px] leading-relaxed placeholder:text-zinc-400"
           />
 
@@ -530,7 +558,7 @@ export function App() {
             {keyRows || sessionReady ? (
               <span className="inline-flex h-11 items-center gap-2 rounded-full bg-emerald-50 px-4 text-[13px] font-semibold text-emerald-700">
                 <span className="h-2 w-2 rounded-full bg-emerald-500" />
-                מפתח טעון · {keyRows ? keyRows.length : session.rows.length}
+                {t(lang, "keyLoadedCount", { n: keyRows ? keyRows.length : session.rows.length })}
               </span>
             ) : null}
             <button
@@ -538,7 +566,7 @@ export function App() {
               onClick={() => keyInputRef.current?.click()}
               className="h-11 rounded-full border border-zinc-200 px-4 text-[13px] font-semibold transition hover:bg-zinc-50"
             >
-              {keyRows || sessionReady ? "טען מפתח אחר" : "טען קובץ מפתח"}
+              {keyRows || sessionReady ? t(lang, "loadOtherKey") : t(lang, "loadKeyFile")}
             </button>
             <input
               ref={keyInputRef}
@@ -559,7 +587,7 @@ export function App() {
             onClick={doRestore}
             className="h-12 rounded-full bg-black px-4 text-sm font-semibold text-white transition hover:brightness-110"
           >
-            שחזר את הערכים המקוריים
+            {t(lang, "restoreOriginals")}
           </button>
 
           {restoreMsg && (
@@ -568,13 +596,11 @@ export function App() {
             </p>
           )}
 
-          {restored !== null && <CopyableText value={restored} tone="ok" />}
+          {restored !== null && <CopyableText value={restored} lang={lang} tone="ok" />}
         </div>
       )}
 
-      <p className="mt-4 text-[11px] leading-relaxed text-zinc-400">
-        המידע הרגיש לא עוזב את הדפדפן. השחזור זמין אוטומטית בלשונית "שחזור תשובה".
-      </p>
+      <p className="mt-4 text-[11px] leading-relaxed text-zinc-400">{t(lang, "footerPrivacy")}</p>
     </main>
   );
 }
