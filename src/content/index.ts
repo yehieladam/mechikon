@@ -15,6 +15,7 @@ import {
   currentSelection,
   focusedComposer,
   getText,
+  highlightTokens,
   replaceSelection,
   setWholeText,
   type Composer,
@@ -23,14 +24,13 @@ import {
 const session = new RedactSession();
 let lastComposer: Composer | null = null;
 
-// Reassure the model the text is ALREADY anonymized (no real PII) so it answers normally instead of
-// refusing to "process sensitive data" — the earlier "masks for sensitive info" wording triggered a
-// refusal. No word like PII/"sensitive"; the example is the digit-free pattern [סוג_מספר], which the
-// restore matcher (needs [..._<digits>]) never touches, so it isn't rewritten inside this note.
-// Single line: ProseMirror/Lexical can drop text after a \n in an execCommand insert.
+// Clearly SEPARATED from the user's message: a dashed rule delimits it. The rule survives even if the
+// editor collapses the newlines, so the note never blends into the message. Wording reassures the model
+// the text is ALREADY anonymized (no PII) so it answers normally instead of refusing; the digit-free
+// [סוג_מספר] example is untouched by the restore matcher (which needs [..._<digits>]).
 const INSTRUCTION =
-  "  שים לב: הטקסט שלמעלה עבר אנונימיזציה ואינו מכיל מידע אישי אמיתי. הסימונים בסוגריים מרובעים (בתבנית [סוג_מספר], למשל שם או מספר) הם תחליפים אנונימיים — התייחס אליהם כאל ערכים רגילים, ענה על הבקשה כרגיל, והשאר כל סימון בתשובתך בדיוק כפי שהוא כדי שנוכל לשחזר.";
-const INSTRUCTION_MARKER = "הטקסט שלמעלה עבר אנונימיזציה";
+  "\n\n———————————————\n🔒 הנחיה ל-AI (מחיקון): הטקסט שמעל עבר אנונימיזציה ואינו מכיל מידע אישי אמיתי. הסימונים בסוגריים מרובעים (בתבנית [סוג_מספר], למשל שם או מספר) הם תחליפים אנונימיים — התייחס אליהם כאל ערכים רגילים, ענה על הבקשה כרגיל, והשאר כל סימון בתשובתך בדיוק כפי שהוא כדי שנוכל לשחזר.";
+const INSTRUCTION_MARKER = "הנחיה ל-AI (מחיקון)";
 
 // ---- UI (shadow DOM, immune to host page CSS) ---------------------------------------
 const ui = mountUi();
@@ -319,6 +319,7 @@ function writeWithInstruction(composer: Composer, redacted: string, addInstructi
   const withInstruction =
     addInstruction && !redacted.includes(INSTRUCTION_MARKER) ? redacted + INSTRUCTION : redacted;
   setWholeText(composer, withInstruction);
+  highlightTokens(composer); // paint the [TOKEN_n] chips green so the user sees what was masked
 }
 
 // ---- redact-all (the chip) -----------------------------------------------------------

@@ -129,6 +129,69 @@ export function replaceSelection(text: string): boolean {
   }
 }
 
+/** Our real placeholder tokens are Latin-label + digits, e.g. [NAME_1]. The instruction's digit-free
+ *  [סוג_מספר] never matches, so it is never highlighted. */
+const TOKEN = /\[[A-Za-z]+_\d+\]/g;
+
+/**
+ * Best-effort: wrap each placeholder token in the composer with a green "chip" span so the user can
+ * SEE what was masked before sending. Contenteditable only (a textarea can't style substrings).
+ * Purely cosmetic and mutation-tolerant: the token TEXT is unchanged (textContent still returns the
+ * clean token), and if the site's editor rejects the DOM change we swallow it — no functional impact.
+ */
+export function highlightTokens(el: Composer): void {
+  if (isInput(el)) {
+    return;
+  }
+  try {
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        if ((node.parentElement as HTMLElement | null)?.dataset.mechikonTok) {
+          return NodeFilter.FILTER_REJECT; // already wrapped
+        }
+        TOKEN.lastIndex = 0;
+        return node.nodeValue && TOKEN.test(node.nodeValue)
+          ? NodeFilter.FILTER_ACCEPT
+          : NodeFilter.FILTER_SKIP;
+      },
+    });
+    const targets: Text[] = [];
+    let node: Node | null;
+    while ((node = walker.nextNode())) {
+      targets.push(node as Text);
+    }
+    for (const textNode of targets) {
+      wrapTokens(textNode);
+    }
+  } catch {
+    // The rich editor rejected the DOM mutation — highlight is cosmetic, so ignore.
+  }
+}
+
+function wrapTokens(textNode: Text): void {
+  const text = textNode.nodeValue ?? "";
+  TOKEN.lastIndex = 0;
+  const fragment = document.createDocumentFragment();
+  let last = 0;
+  let match: RegExpExecArray | null;
+  while ((match = TOKEN.exec(text)) !== null) {
+    if (match.index > last) {
+      fragment.appendChild(document.createTextNode(text.slice(last, match.index)));
+    }
+    const chip = document.createElement("span");
+    chip.textContent = match[0];
+    chip.dataset.mechikonTok = "1";
+    chip.style.cssText =
+      "background:rgba(52,199,89,.20);color:#0a7d38;border-radius:4px;padding:0 3px;font-weight:600;";
+    fragment.appendChild(chip);
+    last = match.index + match[0].length;
+  }
+  if (last < text.length) {
+    fragment.appendChild(document.createTextNode(text.slice(last)));
+  }
+  textNode.parentNode?.replaceChild(fragment, textNode);
+}
+
 export function closestEditable(node: Node | null): HTMLElement | null {
   let el: HTMLElement | null =
     node && node.nodeType === 1 ? (node as HTMLElement) : node?.parentElement ?? null;
