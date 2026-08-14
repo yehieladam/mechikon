@@ -28,6 +28,8 @@ export default tseslint.config(
       "public/vendor/**",
       // Local screenshot/verification scratch scripts (not product code, not committed).
       "_*.mjs",
+      // Throwaway local repro harness (gitignored) — not product code.
+      "scratch-e2e/**",
       // Node build-time tooling for test fixtures (uses node globals), not shipped product code.
       "web/test-fixtures/**/*.mjs",
       // Node build/setup scripts (vendor assets, uses node globals), not shipped product code.
@@ -81,6 +83,18 @@ export default tseslint.config(
       // a justified exception uses eslint-disable-next-line WITH the reason comment.
       "@typescript-eslint/no-explicit-any": "error",
       "no-console": "error",
+    },
+  },
+  {
+    // Extension e2e harness: Playwright specs (node) whose page.evaluate bodies run in the BROWSER,
+    // plus a node fixture server. Allow both global sets and console (test tooling, not shipped).
+    // MUST come after the global no-console block so it wins for these files.
+    files: ["e2e-ext/**/*.{ts,mjs}"],
+    languageOptions: {
+      globals: { ...globals.browser, ...globals.node },
+    },
+    rules: {
+      "no-console": "off",
     },
   },
 );

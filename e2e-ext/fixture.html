@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head><meta charset="utf-8"><title>inline composer fixture</title>
+<style>
+  body { font-family: Arial, sans-serif; padding: 40px; }
+  .composer {
+    min-height: 160px; width: 720px; border: 1px solid #ccc; border-radius: 12px;
+    padding: 16px; font-size: 16px; line-height: 1.6; outline: none;
+  }
+</style></head>
+<body>
+  <h3>Rich contenteditable composer (Gemini/Claude-like: one inner block per line)</h3>
+  <!-- Each line is an inner <div> that INHERITS contenteditable — the exact structure that broke
+       closestEditable. The composer must be treated as the editing host, not per-line. -->
+  <div class="composer" contenteditable="true" id="composer"><div>שלום, קוראים לי דוד כהן ואני גר ברחוב הרצל 15 תל אביב.</div><div>מספר תעודת הזהות שלי הוא 203458179 והטלפון שלי 050-1234567.</div><div>המייל שלי david.cohen@gmail.com.</div></div>
+</body>
+</html>
