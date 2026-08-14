@@ -25,6 +25,9 @@ import {
 
 const session = new RedactSession();
 let lastComposer: Composer | null = null;
+// Re-clamp the dragged chip to the viewport; assigned by makeDraggable (called from mountUi below),
+// so it MUST be declared before that call or the assignment hits the `let` temporal dead zone.
+let reclampChipPosition: () => void = () => {};
 
 // ---- UI (shadow DOM, immune to host page CSS) ---------------------------------------
 // The selection popover's current action, invoked on the button's mousedown (set in refreshPopover).
@@ -304,9 +307,6 @@ function makeDraggable(chip: HTMLElement) {
   });
   window.addEventListener("resize", () => reclampChipPosition());
 }
-
-// Re-clamp the dragged chip to the viewport; assigned by makeDraggable, called once the chip is shown.
-let reclampChipPosition: () => void = () => {};
 
 // ---- click-to-hide: pick mode --------------------------------------------------------
 // When ON, a click on any word/number in a composer masks exactly that value in place (and every
