@@ -65,6 +65,8 @@ export interface SelectionCtx {
   readonly rect: DOMRect;
   /** True when the selection sits inside an editable composer (offer redact); false = read-only (offer restore). */
   readonly inEditable: boolean;
+  /** The exact editable element the selection is in (the target to redact into) — null when read-only. */
+  readonly el: Composer | null;
 }
 
 /** The current non-empty selection with where it is, or null. Handles both input and contenteditable. */
@@ -80,15 +82,18 @@ export function currentSelection(): SelectionCtx | null {
       value: active.value.slice(active.selectionStart, active.selectionEnd),
       rect: active.getBoundingClientRect(),
       inEditable: true,
+      el: active,
     };
   }
   const sel = window.getSelection();
   if (sel && sel.rangeCount > 0 && !sel.isCollapsed) {
     const range = sel.getRangeAt(0);
+    const editable = closestEditable(range.startContainer);
     return {
       value: sel.toString(),
       rect: range.getBoundingClientRect(),
-      inEditable: !!closestEditable(range.startContainer),
+      inEditable: !!editable,
+      el: editable,
     };
   }
   return null;

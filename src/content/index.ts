@@ -416,7 +416,9 @@ function refreshPopover() {
     ui.popBtn.textContent = "הסתר בחירה";
     popAction = () => {
       ui.pop.style.display = "none";
-      const composer = activeComposer();
+      // Operate on the exact element the selection is in (not whatever is "focused") so the value is
+      // always found and replaced in the right place.
+      const composer = ctx.el;
       if (!composer || value.length === 0) {
         showToast("לא ניתן להסתיר את הבחירה", "error");
         return;
