@@ -1,6 +1,9 @@
 /**
  * Mechikon Chrome-extension early-access waitlist — standalone page logic (no framework, no deps).
  *
+ * Interactive one-question-at-a-time flow: email -> profession -> name -> join. Each step validates
+ * before advancing; Enter or the "המשך" button moves forward, "חזרה" moves back.
+ *
  * Talks to the isolated `public.mechikon_waitlist` table in the BAI Portal Supabase project via two
  * SECURITY DEFINER RPCs (anon has NO table read access, so no email can ever leak):
  *   - mechikon_join(name, email, profession, ref) -> { ref_code, referrals }
@@ -20,10 +23,11 @@ const STORAGE_KEY = "mechikon_waitlist_ref";
 
 /** Hebrew UI strings — kept in one place (this standalone page does not load the app's i18n). */
 const T = {
+  continue: "המשך",
   submitIdle: "להצטרף לגישה מוקדמת",
   submitWorking: "רגע…",
-  errRequired: "צריך שם ואימייל.",
   errEmail: "אימייל לא תקין.",
+  errName: "צריך שם.",
   errGeneric: "משהו השתבש. נסו שוב.",
   errConfig: "השירות אינו זמין כרגע. נסו שוב מאוחר יותר.",
   copied: "הועתק ✓",
@@ -45,7 +49,16 @@ function $(id: string): HTMLElement {
 const form = $("form") as HTMLFormElement;
 const statusEl = $("status");
 const errEl = $("err");
-const submitBtn = $("submit") as HTMLButtonElement;
+const nextBtn = $("next") as HTMLButtonElement;
+const backBtn = $("back") as HTMLButtonElement;
+const steps = Array.from(document.querySelectorAll<HTMLElement>(".step"));
+const dots = Array.from(document.querySelectorAll<HTMLElement>(".dot"));
+const LAST = steps.length - 1;
+
+/** Ordered field ids, one per step (matches data-step 0/1/2 in the DOM). */
+const FIELDS = ["email", "profession", "name"] as const;
+
+let current = 0;
 
 function tierFor(count: number): string {
   return (T.tiers.find((t) => count >= t.min) ?? T.tiers[T.tiers.length - 1]).label;
@@ -53,6 +66,33 @@ function tierFor(count: number): string {
 
 function shareUrl(code: string): string {
   return `${location.origin}/waitlist.html?ref=${encodeURIComponent(code)}`;
+}
+
+function valOf(step: number): string {
+  return (($(FIELDS[step]) as HTMLInputElement).value || "").trim();
+}
+
+function isEmail(v: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
+}
+
+/** Returns an error message for the current step, or "" if it is valid. */
+function validate(step: number): string {
+  const v = valOf(step);
+  if (FIELDS[step] === "email") return isEmail(v) ? "" : T.errEmail;
+  if (FIELDS[step] === "name") return v ? "" : T.errName;
+  return ""; // profession is optional
+}
+
+function render(): void {
+  steps.forEach((el, i) => (el.hidden = i !== current));
+  dots.forEach((d, i) => d.classList.toggle("on", i <= current));
+  backBtn.hidden = current === 0;
+  nextBtn.textContent = current === LAST ? T.submitIdle : T.continue;
+  errEl.textContent = "";
+  const input = $(FIELDS[current]) as HTMLInputElement;
+  // Focus after paint so the caret lands and the mobile keyboard opens.
+  setTimeout(() => input.focus(), 0);
 }
 
 /** POST to a Supabase RPC. Throws on any non-2xx or transport error. */
@@ -74,58 +114,46 @@ async function rpc<T>(fn: string, body: Record<string, unknown>): Promise<T> {
 function showStatus(code: string, referrals: number): void {
   ($("count") as HTMLElement).textContent = String(referrals);
   ($("tier") as HTMLElement).textContent = tierFor(referrals);
-  const linkInput = $("link") as HTMLInputElement;
-  linkInput.value = shareUrl(code);
+  ($("link") as HTMLInputElement).value = shareUrl(code);
   form.classList.add("hide");
   statusEl.classList.add("show");
-
-  // Native share (mobile) when available — much better conversion than copy on phones.
-  if (typeof navigator.share === "function") {
-    $("share-native").style.display = "block";
-  }
+  if (typeof navigator.share === "function") $("share-native").style.display = "block";
 }
 
-function isEmail(v: string): boolean {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
-}
-
-async function onSubmit(e: Event): Promise<void> {
-  e.preventDefault();
-  errEl.textContent = "";
-
-  const name = (($("name") as HTMLInputElement).value || "").trim();
-  const email = (($("email") as HTMLInputElement).value || "").trim();
-  const profession = (($("profession") as HTMLInputElement).value || "").trim();
-
-  if (!name || !email) {
-    errEl.textContent = T.errRequired;
-    return;
-  }
-  if (!isEmail(email)) {
-    errEl.textContent = T.errEmail;
-    return;
-  }
-
-  submitBtn.disabled = true;
-  submitBtn.textContent = T.submitWorking;
-
-  const params = new URLSearchParams(location.search);
-  const ref = params.get("ref");
-
+async function submitJoin(): Promise<void> {
+  nextBtn.disabled = true;
+  nextBtn.textContent = T.submitWorking;
+  const ref = new URLSearchParams(location.search).get("ref");
   try {
     const out = await rpc<{ ref_code: string; referrals: number }>("mechikon_join", {
-      p_name: name,
-      p_email: email,
-      p_profession: profession,
+      p_name: valOf(2),
+      p_email: valOf(0),
+      p_profession: valOf(1),
       p_ref: ref,
     });
     localStorage.setItem(STORAGE_KEY, out.ref_code);
     showStatus(out.ref_code, out.referrals ?? 0);
   } catch (err) {
-    errEl.textContent = err instanceof Error && err.message === "config" ? T.errConfig : T.errGeneric;
-    submitBtn.disabled = false;
-    submitBtn.textContent = T.submitIdle;
+    errEl.textContent =
+      err instanceof Error && err.message === "config" ? T.errConfig : T.errGeneric;
+    nextBtn.disabled = false;
+    nextBtn.textContent = T.submitIdle;
   }
+}
+
+async function onSubmit(e: Event): Promise<void> {
+  e.preventDefault();
+  const msg = validate(current);
+  if (msg) {
+    errEl.textContent = msg;
+    return;
+  }
+  if (current < LAST) {
+    current += 1;
+    render();
+    return;
+  }
+  await submitJoin();
 }
 
 function wireCopy(): void {
@@ -135,15 +163,13 @@ function wireCopy(): void {
     try {
       await navigator.clipboard.writeText(link);
     } catch {
-      // Fallback: select the field so the user can copy manually.
       ($("link") as HTMLInputElement).select();
     }
     copyBtn.textContent = T.copied;
     setTimeout(() => (copyBtn.textContent = T.copy), 1600);
   });
 
-  const shareBtn = document.getElementById("share");
-  shareBtn?.addEventListener("click", () => {
+  document.getElementById("share")?.addEventListener("click", () => {
     const link = ($("link") as HTMLInputElement).value;
     navigator.share?.({ title: "מחיקון לכרום", text: "גישה מוקדמת לתוסף מחיקון:", url: link }).catch(
       () => {},
@@ -151,10 +177,10 @@ function wireCopy(): void {
   });
 }
 
-/** Returning visitor: if we already have their code, show status and refresh the live count. */
-async function restoreExisting(): Promise<void> {
+/** Returning visitor: skip the wizard, show status and refresh the live count. */
+async function restoreExisting(): Promise<boolean> {
   const code = localStorage.getItem(STORAGE_KEY);
-  if (!code) return;
+  if (!code) return false;
   showStatus(code, 0);
   try {
     const out = await rpc<{ referrals: number }>("mechikon_status", { p_code: code });
@@ -163,8 +189,18 @@ async function restoreExisting(): Promise<void> {
   } catch {
     // keep the cached view; a failed refresh is non-fatal.
   }
+  return true;
 }
 
 form.addEventListener("submit", onSubmit);
+backBtn.addEventListener("click", () => {
+  if (current > 0) {
+    current -= 1;
+    render();
+  }
+});
 wireCopy();
-void restoreExisting();
+
+void restoreExisting().then((restored) => {
+  if (!restored) render();
+});
