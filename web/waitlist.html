@@ -46,6 +46,23 @@
         margin: 0 auto;
         padding: 28px 20px 72px;
       }
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 10px;
+      }
+      .logo {
+        display: inline-flex;
+        align-items: center;
+        min-height: 44px;
+      }
+      .logo img {
+        height: 46px;
+        width: auto;
+        display: block;
+      }
       .back {
         display: inline-flex;
         align-items: center;
@@ -332,9 +349,14 @@
   </head>
   <body>
     <div class="wrap">
-      <a class="back" href="/">← חזרה למחיקון</a>
+      <header class="topbar">
+        <a href="/" class="logo" aria-label="מחיקון, מעבר לדף הראשי">
+          <img src="/bai-logo.png" alt="BAI Solutions" />
+        </a>
+        <a class="back" href="/">חזרה למחיקון →</a>
+      </header>
 
-      <div style="margin-top: 20px">
+      <div style="margin-top: 8px">
         <span class="badge">בקרוב · תוסף לכרום</span>
       </div>
       <h1>מחיקון גם בתוך ChatGPT ו-Claude</h1>
