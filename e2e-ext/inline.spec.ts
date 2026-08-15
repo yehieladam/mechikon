@@ -130,6 +130,40 @@ test("UI language follows the text: English draft -> English chip + English inst
   expect(text).not.toContain("הנחיה ל-AI"); // not the Hebrew one
 });
 
+test("send-guard: Enter is blocked while unmasked PII is present, second Enter sends", async ({
+  context,
+}) => {
+  const page = context.pages()[0] ?? (await context.newPage());
+  const sent = () => page.evaluate(() => (window as unknown as { __sent: number }).__sent);
+
+  await page.goto(FIXTURE); // Hebrew draft contains an ID (203458179) + email -> deterministic PII
+  await page.click("#composer");
+  await expect(page.locator(".chip")).toBeVisible({ timeout: 5000 });
+
+  // First Enter: blocked (the site's send counter must NOT advance).
+  await page.keyboard.press("Enter");
+  await page.waitForTimeout(200);
+  expect(await sent()).toBe(0);
+  await expect(page.locator(".toast")).toBeVisible();
+
+  // Second Enter within the confirmation window: allowed (explicit override).
+  await page.keyboard.press("Enter");
+  await page.waitForTimeout(200);
+  expect(await sent()).toBe(1);
+});
+
+test("send-guard: text without PII sends immediately", async ({ context }) => {
+  const page = context.pages()[0] ?? (await context.newPage());
+  const sent = () => page.evaluate(() => (window as unknown as { __sent: number }).__sent);
+
+  await page.goto(FIXTURE);
+  await page.$eval("#composer", (el) => (el.textContent = "hello, how are you today?"));
+  await page.click("#composer");
+  await page.keyboard.press("Enter");
+  await page.waitForTimeout(200);
+  expect(await sent()).toBe(1); // no sensitive values -> not blocked
+});
+
 test("re-masking a value already in the key still writes (repeat-value guard)", async ({ context }) => {
   const page = context.pages()[0] ?? (await context.newPage());
   const original =

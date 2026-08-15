@@ -64,6 +64,8 @@ const he = {
   restoredUnmatched: (p: Params) => `שוחזר — ${p.n} סימונים לא זוהו`,
   restored: "שוחזר",
   nerReady: "מנוע זיהוי השמות מוכן — הסתירו שוב לזיהוי שמות, ארגונים ומקומות",
+  sendBlocked: (p: Params) =>
+    `נחסמה שליחה — ${p.n} פרטים רגישים לא מוסתרים. הסתירו, או הקישו Enter שוב לשליחה.`,
   // --- popup ---
   noTextInFile: "לא נמצא טקסט בקובץ (ייתכן PDF סרוק — נסו את האתר)",
   unsupportedType: (p: Params) => `סוג קובץ לא נתמך (${p.message}). נתמכים: PDF, Word, טקסט`,
@@ -135,6 +137,8 @@ const en: Record<keyof typeof he, Entry> = {
   restoredUnmatched: (p) => `Restored — ${p.n} ${Number(p.n) === 1 ? "token" : "tokens"} unmatched`,
   restored: "Restored",
   nerReady: "Name detection is ready — hide again to catch names, orgs and places",
+  sendBlocked: (p) =>
+    `Send blocked — ${p.n} unmasked sensitive ${Number(p.n) === 1 ? "item" : "items"}. Hide them, or press Enter again to send.`,
   noTextInFile: "No text found in the file (a scanned PDF? try the website)",
   unsupportedType: (p) => `Unsupported file type (${p.message}). Supported: PDF, Word, text`,
   pdfUnreadable: "Can't read this PDF here (scanned or protected?) — try the website",

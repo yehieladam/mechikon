@@ -358,6 +358,44 @@ document.addEventListener(
   true,
 );
 
+// ---- send-guard: don't let unmasked PII leave the browser on Enter -------------------
+// Safety net for the moment the user forgets to mask. If Enter would send a composer that still holds
+// DETECTABLE (deterministic) PII — ID, phone, email, IBAN… — block that one send and warn; a second
+// Enter within the window sends anyway (their explicit choice). Shift+Enter (newline) and IME
+// composition are never touched. Names/orgs (NER) are intentionally not blocked here — this guards the
+// hard identifiers, which are the costly leaks, without a model round-trip on the keystroke path.
+let sendBypassUntil = 0;
+window.addEventListener(
+  "keydown",
+  (event) => {
+    if (event.key !== "Enter" || event.shiftKey || event.isComposing) {
+      return;
+    }
+    const editable = closestEditable(event.target as Node | null);
+    if (!editable) {
+      return;
+    }
+    const text = getText(editable);
+    const distinct = new Set(session.detect(text).map((s) => text.slice(s.start, s.end)));
+    if (distinct.size === 0) {
+      return; // nothing sensitive — let it send
+    }
+    if (Date.now() < sendBypassUntil) {
+      sendBypassUntil = 0; // the user already saw the warning and pressed Enter again — allow it
+      return;
+    }
+    // Block this send and arm a short "press Enter again to send" confirmation window.
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    sendBypassUntil = Date.now() + 6000;
+    lastComposer = editable;
+    applyLang(detectTextLang(text, defaultLang()));
+    updateChip(); // surface the amber "sensitive values detected" state
+    showToast(t(uiLang, "sendBlocked", { n: distinct.size }), "error");
+  },
+  true,
+);
+
 function paintPickBtn() {
   ui.pickBtn.textContent = pickMode ? t(uiLang, "pickActive") : t(uiLang, "btnPick");
   ui.pickBtn.classList.toggle("active", pickMode);

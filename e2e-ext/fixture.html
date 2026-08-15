@@ -13,5 +13,16 @@
   <!-- Each line is an inner <div> that INHERITS contenteditable — the exact structure that broke
        closestEditable. The composer must be treated as the editing host, not per-line. -->
   <div class="composer" contenteditable="true" id="composer"><div>שלום, קוראים לי דוד כהן ואני גר ברחוב הרצל 15 תל אביב.</div><div>מספר תעודת הזהות שלי הוא 203458179 והטלפון שלי 050-1234567.</div><div>המייל שלי david.cohen@gmail.com.</div></div>
+  <script>
+    // Stand-in for a chat site's "send on Enter": increments a counter unless something upstream
+    // (the extension's send-guard, which uses window-capture + stopImmediatePropagation) blocks it.
+    window.__sent = 0;
+    document.getElementById("composer").addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        window.__sent += 1;
+        e.preventDefault();
+      }
+    });
+  </script>
 </body>
 </html>
