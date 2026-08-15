@@ -195,6 +195,49 @@ test("send-guard: text without PII sends immediately", async ({ context }) => {
   expect(await sent()).toBe(1); // no sensitive values -> not blocked
 });
 
+test("send-guard: bypass is content-bound — introducing DIFFERENT PII re-blocks", async ({
+  context,
+}) => {
+  const page = context.pages()[0] ?? (await context.newPage());
+  const sent = () => page.evaluate(() => (window as unknown as { __sent: number }).__sent);
+
+  await page.goto(FIXTURE); // has an ID + email
+  await page.click("#composer");
+  await page.keyboard.press("Enter");
+  await page.waitForTimeout(150);
+  expect(await sent()).toBe(0); // blocked, warned about the fixture's values
+
+  // Swap in a DIFFERENT sensitive value (a new email) — the stale bypass must NOT let it through.
+  await page.$eval("#composer", (el) => (el.textContent = "reach me at brand-new@example.org"));
+  await page.click("#composer");
+  await page.keyboard.press("Enter");
+  await page.waitForTimeout(150);
+  expect(await sent()).toBe(0); // re-blocked because the sensitive set changed
+});
+
+test("send-guard: a restored value (name) reappearing is caught even with no deterministic PII", async ({
+  context,
+}) => {
+  const page = context.pages()[0] ?? (await context.newPage());
+  const sent = () => page.evaluate(() => (window as unknown as { __sent: number }).__sent);
+
+  await page.goto(FIXTURE);
+  await page.click("#composer");
+  await expect(page.locator(".chip")).toBeVisible({ timeout: 5000 });
+
+  // Mask a name so it lives in the restore key.
+  await page.getByRole("button", { name: "בחר ידנית" }).click();
+  await clickWord(page, "דוד");
+  await expect.poll(() => composerText(page)).not.toContain("דוד");
+
+  // Simulate pasting a live-restored answer back: contains the real name, but NO deterministic PII.
+  await page.$eval("#composer", (el) => (el.textContent = "תודה דוד, נשמע טוב"));
+  await page.click("#composer");
+  await page.keyboard.press("Enter");
+  await page.waitForTimeout(150);
+  expect(await sent()).toBe(0); // blocked — the key-value check flags the reappearing name
+});
+
 test("re-masking a value already in the key still writes (repeat-value guard)", async ({ context }) => {
   const page = context.pages()[0] ?? (await context.newPage());
   const original =

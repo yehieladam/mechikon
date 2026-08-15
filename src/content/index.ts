@@ -21,6 +21,7 @@ import {
   focusedComposer,
   getText,
   highlightTokens,
+  isInput,
   replaceSelection,
   setWholeText,
   wordAtPoint,
@@ -360,38 +361,65 @@ document.addEventListener(
 
 // ---- send-guard: don't let unmasked PII leave the browser on Enter -------------------
 // Safety net for the moment the user forgets to mask. If Enter would send a composer that still holds
-// DETECTABLE (deterministic) PII — ID, phone, email, IBAN… — block that one send and warn; a second
-// Enter within the window sends anyway (their explicit choice). Shift+Enter (newline) and IME
-// composition are never touched. Names/orgs (NER) are intentionally not blocked here — this guards the
-// hard identifiers, which are the costly leaks, without a model round-trip on the keystroke path.
-let sendBypassUntil = 0;
+// sensitive text, block that one send and warn; pressing Enter again for the SAME values sends them
+// (their explicit choice). Shift+Enter (newline) and IME composition are never touched.
+
+/** Every sensitive value present in `text`: deterministically-detected PII (ID/phone/email/IBAN/…)
+ *  PLUS any known original value from the restore key — including NER names/orgs — that reappears.
+ *  The key-value check is what makes a live-restored answer pasted back into the box get caught even
+ *  for categories the keystroke-path detector doesn't model. Fails CLOSED: an engine error counts as
+ *  sensitive so the guard blocks rather than leaks. */
+function sensitiveValuesIn(text: string): Set<string> {
+  const found = new Set<string>();
+  try {
+    for (const span of session.detect(text)) {
+      found.add(text.slice(span.start, span.end));
+    }
+  } catch {
+    found.add(" detect-error"); // force a block on the rare engine throw — never fail open
+  }
+  for (const row of session.rows) {
+    if (row.original.length >= 2 && text.includes(row.original)) {
+      found.add(row.original);
+    }
+  }
+  return found;
+}
+
+// The exact value-set the user was last warned about. The bypass is CONTENT-bound, not time-bound: a
+// second Enter only passes if the current sensitive set is the same one already warned — introduce a
+// new/different sensitive value and it re-blocks (a stale time window would let fresh PII slip through).
+let warnedValues: Set<string> | null = null;
 window.addEventListener(
   "keydown",
   (event) => {
     if (event.key !== "Enter" || event.shiftKey || event.isComposing) {
       return;
     }
-    const editable = closestEditable(event.target as Node | null);
+    const target = event.target as Element | null;
+    // Cover BOTH composer families — a bare <textarea>/<input> is not contentEditable, so
+    // closestEditable alone would miss it and the send would go unguarded.
+    const editable: Composer | null = isInput(target) ? target : closestEditable(target);
     if (!editable) {
       return;
     }
-    const text = getText(editable);
-    const distinct = new Set(session.detect(text).map((s) => text.slice(s.start, s.end)));
-    if (distinct.size === 0) {
-      return; // nothing sensitive — let it send
-    }
-    if (Date.now() < sendBypassUntil) {
-      sendBypassUntil = 0; // the user already saw the warning and pressed Enter again — allow it
+    const sensitive = sensitiveValuesIn(getText(editable));
+    if (sensitive.size === 0) {
+      warnedValues = null; // clean composer — disarm and allow
       return;
     }
-    // Block this send and arm a short "press Enter again to send" confirmation window.
+    if (warnedValues && [...sensitive].every((v) => warnedValues?.has(v))) {
+      warnedValues = null; // exactly the values the user already confirmed — allow this send
+      return;
+    }
+    // Block this send; arm the bypass for THIS content (new PII later will re-block).
     event.preventDefault();
     event.stopImmediatePropagation();
-    sendBypassUntil = Date.now() + 6000;
+    warnedValues = sensitive;
     lastComposer = editable;
-    applyLang(detectTextLang(text, defaultLang()));
+    applyLang(detectTextLang(getText(editable), defaultLang()));
     updateChip(); // surface the amber "sensitive values detected" state
-    showToast(t(uiLang, "sendBlocked", { n: distinct.size }), "error");
+    showToast(t(uiLang, "sendBlocked", { n: sensitive.size }), "error");
   },
   true,
 );
@@ -546,8 +574,9 @@ function restoreVisible() {
 // ---- live restore: un-mask the AI's answer as it streams in --------------------------
 // When a key exists, restore [TOKEN]s to their real values live, as the answer renders — so the user
 // reads real values with no manual step. Read-only areas ONLY (never a composer). This is a local
-// display change; if the user copies a restored answer back into the composer, the send-guard
-// re-detects the raw PII and blocks the send — so live restore can't cause an accidental re-leak.
+// display change; if the user copies a restored answer back into the composer, the send-guard catches
+// it — its key-value check re-flags any restored value (names/orgs included), so live restore can't
+// cause a silent re-leak.
 let liveTimer = 0;
 const livePending = new Set<Text>();
 
