@@ -543,6 +543,91 @@ function restoreVisible() {
   );
 }
 
+// ---- live restore: un-mask the AI's answer as it streams in --------------------------
+// When a key exists, restore [TOKEN]s to their real values live, as the answer renders — so the user
+// reads real values with no manual step. Read-only areas ONLY (never a composer). This is a local
+// display change; if the user copies a restored answer back into the composer, the send-guard
+// re-detects the raw PII and blocks the send — so live restore can't cause an accidental re-leak.
+let liveTimer = 0;
+const livePending = new Set<Text>();
+
+/** Queue any token-bearing text node under `node` (a changed text node or a freshly added subtree). */
+function queueLiveNode(node: Node): void {
+  if (node.nodeType === Node.TEXT_NODE) {
+    const tn = node as Text;
+    if (tn.nodeValue && tn.nodeValue.indexOf("[") !== -1) {
+      livePending.add(tn);
+    }
+    return;
+  }
+  if (node.nodeType !== Node.ELEMENT_NODE) {
+    return;
+  }
+  const el = node as HTMLElement;
+  const tag = el.tagName;
+  if (tag === "SCRIPT" || tag === "STYLE" || tag === "NOSCRIPT") {
+    return;
+  }
+  if (!el.textContent || el.textContent.indexOf("[") === -1) {
+    return; // no token anywhere inside — skip the walk entirely
+  }
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  let n: Node | null;
+  while ((n = walker.nextNode())) {
+    const tn = n as Text;
+    if (tn.nodeValue && tn.nodeValue.indexOf("[") !== -1) {
+      livePending.add(tn);
+    }
+  }
+}
+
+function flushLiveRestore(): void {
+  liveTimer = 0;
+  const nodes = [...livePending];
+  livePending.clear();
+  for (const tn of nodes) {
+    if (!tn.isConnected) {
+      continue;
+    }
+    const parent = tn.parentElement;
+    // Never rewrite inside a composer (that is the user's own input, handled by the mask flow).
+    if (!parent || closestEditable(parent)) {
+      continue;
+    }
+    const original = tn.nodeValue ?? "";
+    if (original.indexOf("[") === -1) {
+      continue;
+    }
+    const { text } = session.restore(original);
+    // Setting nodeValue re-fires the observer, but the restored text has no tokens left, so the next
+    // pass finds nothing to change and the loop terminates.
+    if (text !== original) {
+      tn.nodeValue = text;
+    }
+  }
+}
+
+const liveObserver = new MutationObserver((records) => {
+  if (!session.hasKey) {
+    return;
+  }
+  for (const rec of records) {
+    if (rec.type === "characterData") {
+      queueLiveNode(rec.target);
+    }
+    rec.addedNodes.forEach(queueLiveNode);
+  }
+  if (livePending.size > 0 && liveTimer === 0) {
+    liveTimer = window.setTimeout(flushLiveRestore, 120);
+  }
+});
+
+function startLiveRestore(): void {
+  if (document.body) {
+    liveObserver.observe(document.body, { childList: true, characterData: true, subtree: true });
+  }
+}
+
 // ---- auto-detect: watch the composer -------------------------------------------------
 let detectTimer = 0;
 function scheduleDetect() {
@@ -763,6 +848,8 @@ void session.hydrate().then(() => updateChip());
 // SPA composers mount after our script — retry the initial scan a few times so a pre-existing draft
 // is picked up even if the editor wasn't in the DOM yet at load.
 [400, 1200, 2500].forEach((ms) => window.setTimeout(updateChip, ms));
+// Watch the page and un-mask tokens in AI answers as they stream in (no-op until a key exists).
+startLiveRestore();
 
 // eslint-disable-next-line no-console
 console.log("[mechikon] inline content script ready on", location.host);

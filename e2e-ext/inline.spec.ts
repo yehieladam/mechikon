@@ -130,6 +130,37 @@ test("UI language follows the text: English draft -> English chip + English inst
   expect(text).not.toContain("הנחיה ל-AI"); // not the Hebrew one
 });
 
+test("live restore: tokens in the AI answer are un-masked as they appear (composer untouched)", async ({
+  context,
+}) => {
+  const page = context.pages()[0] ?? (await context.newPage());
+  await page.goto(FIXTURE);
+  await page.click("#composer");
+  await expect(page.locator(".chip")).toBeVisible({ timeout: 5000 });
+
+  // Mask a value so the session has a key, and capture the exact token that was minted.
+  await page.getByRole("button", { name: "בחר ידנית" }).click();
+  await clickWord(page, "דוד");
+  await expect.poll(() => composerText(page)).not.toContain("דוד");
+  const token = (await composerText(page)).match(/\[[A-Za-z]+_\d+\]/)?.[0];
+  expect(token, "a token should have been minted").toBeTruthy();
+
+  // Simulate a streamed AI answer (read-only element) that contains the token.
+  await page.evaluate((tok) => {
+    const el = document.createElement("div");
+    el.id = "answer";
+    el.textContent = `The document mentions ${tok} in section 2.`;
+    document.body.appendChild(el);
+  }, token);
+
+  // The observer un-masks it back to the real value, in place.
+  await expect.poll(() => page.$eval("#answer", (el) => el.textContent)).toContain("דוד");
+  expect(await page.$eval("#answer", (el) => el.textContent)).not.toContain(token!);
+
+  // The composer itself (editable) keeps its token — live restore never rewrites the user's input.
+  expect(await composerText(page)).toContain(token!);
+});
+
 test("send-guard: Enter is blocked while unmasked PII is present, second Enter sends", async ({
   context,
 }) => {
