@@ -1328,7 +1328,7 @@ export function App() {
           </div>
         </div>
       )}
-      <header className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-x-4 gap-y-1 px-6 py-5">
+      <header className="mx-auto flex max-w-5xl items-center px-6 py-3">
         <a
           href="https://www.bai-solutions.com/lawyers/suite"
           target="_blank"
@@ -1337,53 +1337,10 @@ export function App() {
         >
           <img src="/bai-logo.png" alt="BAI Solutions" className="h-[72px] w-auto object-contain" />
         </a>
-        {(() => {
-          // The badge proves DESTINATION, not just count: a request to any host that is not same-origin
-          // or a model host is an exfiltration signal → red alarm naming the host. Otherwise emerald
-          // (0 main requests) or amber (some benign main request), plus the one-time model count.
-          const unexpected = net.unexpected + ner.unexpectedRequests;
-          const unexpectedHost = net.unexpectedHost ?? ner.unexpectedHost;
-          const dotColor = unexpected > 0 ? "bg-red-500" : net.count === 0 ? "bg-emerald-500" : "bg-amber-500";
-          // Quiet badge: emerald TEXT (no filled pill) only at a true zero; benign counts stay zinc; the
-          // exfiltration alarm stays red. Links to the privacy section. The destination-verification
-          // logic (unexpected host) and the model-loaded status are preserved exactly.
-          const tone =
-            unexpected > 0 ? "text-red-600" : net.count === 0 ? "text-emerald-700" : "text-zinc-500";
-          return (
-            <a
-              href="#faq"
-              className={`inline-flex min-h-[44px] max-w-full items-center gap-1.5 rounded text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/20 ${tone}`}
-              aria-live="polite"
-            >
-              <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dotColor}`} aria-hidden="true" />
-              {unexpected > 0 ? (
-                <span className="truncate font-medium">
-                  {t("trust.badge.unexpected", { host: unexpectedHost ?? "?" })}
-                </span>
-              ) : (
-                <span className={net.count === 0 ? "font-medium" : "tnum"}>
-                  {net.count === 0
-                    ? t("trust.badge.count")
-                    : t("trust.badge.countN", { count: net.count })}
-                  {/* Once the model is loaded, show a STATUS, not a rising request count: the count
-                      includes cache-served requests on reload and misreads as a re-download (it is not —
-                      the model is fetched once and served from the browser cache thereafter). */}
-                  {ner.status === "ready" ? (
-                    <span className="text-zinc-500"> · {t("trust.badge.modelLoaded")}</span>
-                  ) : (
-                    ner.modelRequests > 0 && (
-                      <span className="text-zinc-500"> · {t("trust.badge.model", { count: ner.modelRequests })}</span>
-                    )
-                  )}
-                </span>
-              )}
-            </a>
-          );
-        })()}
       </header>
 
       <main className="mx-auto max-w-2xl px-6">
-        <section className="pt-12 text-center sm:pt-16">
+        <section className="pt-4 text-center sm:pt-8">
           <img
             src="/logo.png"
             alt=""
@@ -1405,6 +1362,53 @@ export function App() {
             <span className="marker-highlight text-zinc-700">{t("hero.subtitleSmall")}</span>
           </p>
           <p className="mt-3 text-[15px] font-medium text-ink">{t("hero.taglineStrong")}</p>
+          {/* Live network trust badge (moved here from the header) — the "nothing leaves the device"
+              proof reads best right under the hero promise, centered. */}
+          <div className="mt-3 flex justify-center">
+            {(() => {
+              // The badge proves DESTINATION, not just count: a request to any host that is not same-origin
+              // or a model host is an exfiltration signal → red alarm naming the host. Otherwise emerald
+              // (0 main requests) or amber (some benign main request), plus the one-time model count.
+              const unexpected = net.unexpected + ner.unexpectedRequests;
+              const unexpectedHost = net.unexpectedHost ?? ner.unexpectedHost;
+              const dotColor = unexpected > 0 ? "bg-red-500" : net.count === 0 ? "bg-emerald-500" : "bg-amber-500";
+              // Quiet badge: emerald TEXT (no filled pill) only at a true zero; benign counts stay zinc; the
+              // exfiltration alarm stays red. Links to the privacy section. The destination-verification
+              // logic (unexpected host) and the model-loaded status are preserved exactly.
+              const tone =
+                unexpected > 0 ? "text-red-600" : net.count === 0 ? "text-emerald-700" : "text-zinc-500";
+              return (
+                <a
+                  href="#faq"
+                  className={`inline-flex min-h-[44px] max-w-full items-center gap-1.5 rounded text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/20 ${tone}`}
+                  aria-live="polite"
+                >
+                  <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dotColor}`} aria-hidden="true" />
+                  {unexpected > 0 ? (
+                    <span className="truncate font-medium">
+                      {t("trust.badge.unexpected", { host: unexpectedHost ?? "?" })}
+                    </span>
+                  ) : (
+                    <span className={net.count === 0 ? "font-medium" : "tnum"}>
+                      {net.count === 0
+                        ? t("trust.badge.count")
+                        : t("trust.badge.countN", { count: net.count })}
+                      {/* Once the model is loaded, show a STATUS, not a rising request count: the count
+                          includes cache-served requests on reload and misreads as a re-download (it is not —
+                          the model is fetched once and served from the browser cache thereafter). */}
+                      {ner.status === "ready" ? (
+                        <span className="text-zinc-500"> · {t("trust.badge.modelLoaded")}</span>
+                      ) : (
+                        ner.modelRequests > 0 && (
+                          <span className="text-zinc-500"> · {t("trust.badge.model", { count: ner.modelRequests })}</span>
+                        )
+                      )}
+                    </span>
+                  )}
+                </a>
+              );
+            })()}
+          </div>
           <button
             type="button"
             onClick={() => setDemoOpen(true)}
