@@ -10,12 +10,24 @@ import { defineManifest } from "@crxjs/vite-plugin";
 // - Zero permissions: a paste/upload popup needs none — keep it that way (Store trust).
 export default defineManifest({
   manifest_version: 3,
-  name: "מחיקון — Hebrew PII Anonymizer (dev build)",
+  name: "מחיקון · Mechikon — Hebrew PII Anonymizer",
   version: "0.1.0",
   description:
-    "Anonymize Israeli PII in Hebrew text, fully in your browser. Nothing leaves your device.",
+    "Mask Hebrew & Israeli personal details before sending them to AI chats — 100% in your browser. Nothing leaves your device.",
+  icons: {
+    16: "icons/icon-16.png",
+    32: "icons/icon-32.png",
+    48: "icons/icon-48.png",
+    128: "icons/icon-128.png",
+  },
   action: {
     default_popup: "src/popup/index.html",
+    default_icon: {
+      16: "icons/icon-16.png",
+      32: "icons/icon-32.png",
+      48: "icons/icon-48.png",
+      128: "icons/icon-128.png",
+    },
   },
   permissions: ["storage", "offscreen"],
   // Lets the extension fetch the NER model cross-origin from HF without CORS ("Failed to fetch"):

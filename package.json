@@ -28,7 +28,8 @@
     "pretest:e2e": "npm run fixtures:pdf",
     "pretest": "npm run fixtures:pdf",
     "test:e2e:model": "playwright test --grep @model",
-    "test:e2e:ext": "playwright test --config playwright.ext.config.ts"
+    "test:e2e:ext": "playwright test --config playwright.ext.config.ts",
+    "pack": "npm run build && node scripts/pack-extension.mjs"
   },
   "dependencies": {
     "@huggingface/transformers": "4.2.0",
