@@ -16,8 +16,15 @@
  * qualitative tier. Absolute position / total signups are never surfaced.
  */
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string | undefined;
-const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+// The publishable key is public by design (RLS-enforced, insert-only via RPC) and ships in the client
+// bundle regardless of how it is provided, so a hardcoded default lets any deploy work with zero config.
+// Set VITE_SUPABASE_* to override (e.g. to rotate the key or point at a different project).
+const SUPABASE_URL =
+  (import.meta.env.VITE_SUPABASE_URL as string | undefined) ??
+  "https://gobvecxhqxvuodsixtay.supabase.co";
+const SUPABASE_KEY =
+  (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined) ??
+  "sb_publishable_j80iyO3FVUSQtfmSCCs6-w_0Yx7WoM5";
 
 const STORAGE_KEY = "mechikon_waitlist_ref";
 
