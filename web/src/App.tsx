@@ -1264,6 +1264,27 @@ export function App() {
 
   return (
     <div dir="rtl" className="min-h-screen overflow-x-hidden bg-white text-ink">
+      {/* Top announcement bar for the Chrome extension early-access waitlist. Whole bar links to the
+          standalone /waitlist.html page (its own relaxed CSP; this app stays locked). */}
+      <a
+        href="/waitlist.html"
+        className="group block w-full border-b border-white/10 bg-ink text-white"
+      >
+        <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-center gap-x-2.5 gap-y-1 px-4 py-2.5 text-center text-[13px] sm:text-sm">
+          <span className="relative flex h-2 w-2 shrink-0" aria-hidden="true">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
+            <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400"></span>
+          </span>
+          <span className="font-semibold">{t("banner.title")}</span>
+          <span className="hidden text-white/60 md:inline">{t("banner.text")}</span>
+          <span className="inline-flex items-center gap-1 font-semibold text-white underline decoration-white/40 underline-offset-4 transition group-hover:decoration-white">
+            {t("banner.cta")}
+            <span aria-hidden="true" className="transition-transform group-hover:-translate-x-0.5">
+              ←
+            </span>
+          </span>
+        </div>
+      </a>
       {demoOpen && (
         <div
           role="dialog"
