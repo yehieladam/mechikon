@@ -111,13 +111,11 @@ processing happens on-device; no user data is collected or transmitted.
 
 ## 9. Privacy policy URL (required)
 
-Host `docs/PRIVACY.md` at a public URL and paste it here. Suggested:
+Hosted on the web app (PR #148 → merge + deploy makes it live):
 
 ```
-https://mechikon.bai-solutions.com/extension-privacy
+https://mechikon.bai-solutions.com/extension-privacy.html
 ```
-
-> TODO: publish PRIVACY.md at that path on the web app (or any public URL).
 
 ---
 
