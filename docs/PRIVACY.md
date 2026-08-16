@@ -21,16 +21,19 @@ chat. It is built so that **your sensitive data never leaves your browser.**
 
 ## Network access
 
-The only network request the extension makes is a **one-time download of the
-Hebrew name-detection model** from the Hugging Face CDN (`huggingface.co` /
-`*.hf.co`). This downloads model *weights to your browser*; **none of your text
-or personal data is sent** in that request. After the first download the model is
-cached locally and reused.
+The only network request the extension makes is a **one-time download of a
+name-detection model** from the Hugging Face CDN (`huggingface.co` / `*.hf.co`).
+A Hebrew model is downloaded for Hebrew text and an English model for English
+text — only the one matching the language you use, and only the first time. This
+downloads model *weights to your browser*; **none of your text or personal data
+is sent** in that request. After the first download the model is cached locally
+and reused.
 
 ## Permissions and why they are needed
 
 - **storage** — to keep the local restore key (24h) so you can un-mask answers.
-- **offscreen** — to run the name-detection model in the background, on-device.
+- **offscreen** — to run the name-detection model (Hebrew or English) in the
+  background, on-device.
 - **host access to `huggingface.co` / `*.hf.co`** — solely to download the model
   weights described above.
 - **Content scripts on ChatGPT, Claude, and Gemini** — to show the masking
