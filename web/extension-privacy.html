@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="/logo.png" />
+    <meta
+      name="description"
+      content="Privacy policy for the Mechikon Chrome extension — your sensitive data never leaves your browser."
+    />
+    <title>Mechikon — Extension Privacy Policy</title>
+    <style>
+      /* Self-contained, CSP-clean (style-src 'self' 'unsafe-inline'; no external fonts/scripts).
+         System font stack matches the app (index.css) and needs no download. */
+      :root {
+        color-scheme: light;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+      }
+      body {
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+        -webkit-font-smoothing: antialiased;
+        background: #ffffff;
+        color: #0a0a0a;
+        line-height: 1.75;
+      }
+      .wrap {
+        max-width: 720px;
+        margin: 0 auto;
+        padding: 48px 24px 96px;
+      }
+      a {
+        color: #0a0a0a;
+      }
+      .back {
+        display: inline-flex;
+        align-items: center;
+        min-height: 44px;
+        margin-bottom: 24px;
+        font-size: 14px;
+        color: #52525b;
+        text-decoration: none;
+      }
+      .back:hover {
+        color: #0a0a0a;
+      }
+      h1 {
+        font-size: 28px;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+        margin: 0 0 8px;
+      }
+      .updated {
+        font-size: 14px;
+        color: #71717a;
+        margin: 0 0 32px;
+      }
+      .lede {
+        border-inline-start: 3px solid #a7f3d0;
+        background: #f0fdf4;
+        padding: 12px 16px;
+        border-radius: 12px;
+        font-size: 15px;
+        color: #065f46;
+        margin: 0 0 32px;
+      }
+      h2 {
+        font-size: 18px;
+        font-weight: 600;
+        margin: 32px 0 8px;
+      }
+      p {
+        margin: 0 0 12px;
+        font-size: 15px;
+        color: #3f3f46;
+      }
+      ul {
+        margin: 0 0 12px;
+        padding-inline-start: 20px;
+      }
+      li {
+        margin: 0 0 8px;
+        font-size: 15px;
+        color: #3f3f46;
+      }
+      code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 13px;
+        background: #f4f4f5;
+        padding: 1px 5px;
+        border-radius: 4px;
+      }
+      strong {
+        font-weight: 600;
+        color: #0a0a0a;
+      }
+      footer {
+        margin-top: 48px;
+        padding-top: 24px;
+        border-top: 1px solid #ededed;
+        font-size: 14px;
+        color: #71717a;
+      }
+      @media print {
+        .back {
+          display: none;
+        }
+        .wrap {
+          padding: 0;
+          max-width: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <a class="back" href="/">← Back to Mechikon</a>
+
+      <h1>Privacy Policy — Mechikon Chrome Extension</h1>
+      <p class="updated">Last updated: 2026-08-16</p>
+
+      <p class="lede">
+        Mechikon masks personal and sensitive details in text before you send it to an AI chat. It is
+        built so that <strong>your sensitive data never leaves your browser.</strong>
+      </p>
+
+      <h2>What the extension does with your data</h2>
+      <ul>
+        <li>
+          <strong>Text you choose to mask</strong> (typed in a chat composer, or from a file you drop
+          into the popup) is processed <strong>entirely on your device</strong>. It is never uploaded
+          to us or to any third party. The AI chat only ever receives the <em>masked</em> text, in
+          which real values are replaced by neutral tokens such as <code>[NAME_1]</code>.
+        </li>
+        <li>
+          <strong>Restore key.</strong> To let you turn tokens back into the original values, the
+          mapping (token → original value) is stored <strong>locally</strong> in your browser
+          (<code>chrome.storage.local</code>) and expires automatically after 24 hours. It is never
+          transmitted. You may also export it as a file that stays on your computer.
+        </li>
+        <li>
+          <strong>No accounts, no tracking, no analytics, no advertising.</strong> The extension has
+          no servers of its own and does not collect usage data, telemetry, or identifiers.
+        </li>
+      </ul>
+
+      <h2>Network access</h2>
+      <p>
+        The only network request the extension makes is a <strong>one-time download of a
+        name-detection model</strong> from the Hugging Face CDN (<code>huggingface.co</code> /
+        <code>*.hf.co</code>). A Hebrew model is downloaded for Hebrew text and an English model for
+        English text — only the one matching the language you use, and only the first time. This
+        downloads model <em>weights to your browser</em>; <strong>none of your text or personal data
+        is sent</strong> in that request. After the first download the model is cached locally and
+        reused.
+      </p>
+
+      <h2>Permissions and why they are needed</h2>
+      <ul>
+        <li><strong>storage</strong> — to keep the local restore key (24h) so you can un-mask answers.</li>
+        <li>
+          <strong>offscreen</strong> — to run the name-detection model (Hebrew or English) in the
+          background, on-device.
+        </li>
+        <li>
+          <strong>host access to <code>huggingface.co</code> / <code>*.hf.co</code></strong> — solely
+          to download the model weights described above.
+        </li>
+        <li>
+          <strong>Content scripts on ChatGPT, Claude, and Gemini</strong> — to show the masking
+          controls inside those chat composers. The extension does not read or transmit page content
+          anywhere; it acts only on the text you choose to mask.
+        </li>
+      </ul>
+
+      <h2>Data sharing</h2>
+      <p>
+        We do not sell, share, or transmit your data to anyone. There is nothing to share — processing
+        happens locally and produces no data on our side.
+      </p>
+
+      <h2>Open source</h2>
+      <p>
+        Mechikon's engine and extension are open source (AGPL-3.0). You can inspect exactly what the
+        code does.
+      </p>
+
+      <h2>Contact</h2>
+      <p>Questions: <a href="mailto:yehiel@bai-solutions.com">yehiel@bai-solutions.com</a></p>
+
+      <footer>Mechikon · BAI Solutions</footer>
+    </div>
+  </body>
+</html>
