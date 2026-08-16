@@ -108,6 +108,9 @@ const TYPE_LABEL: Record<EntityType, string> = {
   LOCATION: "entity.place",
   MANUAL: "entity.manual",
   IL_NUMBER: "entity.number",
+  CREDIT_CARD: "entity.creditCard",
+  US_SSN: "entity.ssn",
+  US_PHONE: "entity.usPhone",
 };
 
 /** Split on placeholder tokens and render each as a subtle pill so the redactions read clearly. */

@@ -32,6 +32,9 @@ const LABELS: Readonly<Record<EntityType, string>> = {
   IL_POLICY: "POLICY",
   IL_INSURED: "INSURED",
   EMAIL_ADDRESS: "EMAIL",
+  CREDIT_CARD: "CARD",
+  US_SSN: "SSN",
+  US_PHONE: "USPHONE", // distinct from IL_PHONE's "PHONE" so the two never share a [PHONE_n] token
   PERSON: "NAME",
   ORGANIZATION: "ORG",
   LOCATION: "LOC",

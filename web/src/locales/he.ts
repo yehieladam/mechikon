@@ -102,6 +102,9 @@ export const he = {
     email: "אימייל",
     manual: "ידני",
     number: "מספר",
+    creditCard: "כרטיס אשראי",
+    ssn: "SSN",
+    usPhone: "טלפון (ארה״ב)",
   },
   category: {
     legend: "בחרו אילו סוגי מידע להשחיר",
