@@ -108,6 +108,9 @@ const TYPE_LABEL: Record<EntityType, string> = {
   LOCATION: "entity.place",
   MANUAL: "entity.manual",
   IL_NUMBER: "entity.number",
+  CREDIT_CARD: "entity.creditCard",
+  US_SSN: "entity.ssn",
+  US_PHONE: "entity.usPhone",
 };
 
 /** Split on placeholder tokens and render each as a subtle pill so the redactions read clearly. */
@@ -1264,6 +1267,27 @@ export function App() {
 
   return (
     <div dir="rtl" className="min-h-screen overflow-x-hidden bg-white text-ink">
+      {/* Top announcement bar for the Chrome extension early-access waitlist. Whole bar links to the
+          standalone /waitlist.html page (its own relaxed CSP; this app stays locked). */}
+      <a
+        href="/waitlist.html"
+        className="group block w-full border-b border-white/10 bg-ink text-white"
+      >
+        <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-center gap-x-2.5 gap-y-1 px-4 py-2.5 text-center text-[13px] sm:text-sm">
+          <span className="relative flex h-2 w-2 shrink-0" aria-hidden="true">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
+            <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400"></span>
+          </span>
+          <span className="font-semibold">{t("banner.title")}</span>
+          <span className="hidden text-white/60 md:inline">{t("banner.text")}</span>
+          <span className="inline-flex items-center gap-1 font-semibold text-white underline decoration-white/40 underline-offset-4 transition group-hover:decoration-white">
+            {t("banner.cta")}
+            <span aria-hidden="true" className="transition-transform group-hover:-translate-x-0.5">
+              ←
+            </span>
+          </span>
+        </div>
+      </a>
       {demoOpen && (
         <div
           role="dialog"
@@ -1307,7 +1331,7 @@ export function App() {
           </div>
         </div>
       )}
-      <header className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-x-4 gap-y-1 px-6 py-5">
+      <header className="mx-auto flex max-w-5xl items-center px-6 py-3">
         <a
           href="https://www.bai-solutions.com/lawyers/suite"
           target="_blank"
@@ -1316,53 +1340,10 @@ export function App() {
         >
           <img src="/bai-logo.png" alt="BAI Solutions" className="h-[72px] w-auto object-contain" />
         </a>
-        {(() => {
-          // The badge proves DESTINATION, not just count: a request to any host that is not same-origin
-          // or a model host is an exfiltration signal → red alarm naming the host. Otherwise emerald
-          // (0 main requests) or amber (some benign main request), plus the one-time model count.
-          const unexpected = net.unexpected + ner.unexpectedRequests;
-          const unexpectedHost = net.unexpectedHost ?? ner.unexpectedHost;
-          const dotColor = unexpected > 0 ? "bg-red-500" : net.count === 0 ? "bg-emerald-500" : "bg-amber-500";
-          // Quiet badge: emerald TEXT (no filled pill) only at a true zero; benign counts stay zinc; the
-          // exfiltration alarm stays red. Links to the privacy section. The destination-verification
-          // logic (unexpected host) and the model-loaded status are preserved exactly.
-          const tone =
-            unexpected > 0 ? "text-red-600" : net.count === 0 ? "text-emerald-700" : "text-zinc-500";
-          return (
-            <a
-              href="#faq"
-              className={`inline-flex min-h-[44px] max-w-full items-center gap-1.5 rounded text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/20 ${tone}`}
-              aria-live="polite"
-            >
-              <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dotColor}`} aria-hidden="true" />
-              {unexpected > 0 ? (
-                <span className="truncate font-medium">
-                  {t("trust.badge.unexpected", { host: unexpectedHost ?? "?" })}
-                </span>
-              ) : (
-                <span className={net.count === 0 ? "font-medium" : "tnum"}>
-                  {net.count === 0
-                    ? t("trust.badge.count")
-                    : t("trust.badge.countN", { count: net.count })}
-                  {/* Once the model is loaded, show a STATUS, not a rising request count: the count
-                      includes cache-served requests on reload and misreads as a re-download (it is not —
-                      the model is fetched once and served from the browser cache thereafter). */}
-                  {ner.status === "ready" ? (
-                    <span className="text-zinc-500"> · {t("trust.badge.modelLoaded")}</span>
-                  ) : (
-                    ner.modelRequests > 0 && (
-                      <span className="text-zinc-500"> · {t("trust.badge.model", { count: ner.modelRequests })}</span>
-                    )
-                  )}
-                </span>
-              )}
-            </a>
-          );
-        })()}
       </header>
 
       <main className="mx-auto max-w-2xl px-6">
-        <section className="pt-12 text-center sm:pt-16">
+        <section className="pt-4 text-center sm:pt-8">
           <img
             src="/logo.png"
             alt=""
@@ -1384,6 +1365,53 @@ export function App() {
             <span className="marker-highlight text-zinc-700">{t("hero.subtitleSmall")}</span>
           </p>
           <p className="mt-3 text-[15px] font-medium text-ink">{t("hero.taglineStrong")}</p>
+          {/* Live network trust badge (moved here from the header) — the "nothing leaves the device"
+              proof reads best right under the hero promise, centered. */}
+          <div className="mt-3 flex justify-center">
+            {(() => {
+              // The badge proves DESTINATION, not just count: a request to any host that is not same-origin
+              // or a model host is an exfiltration signal → red alarm naming the host. Otherwise emerald
+              // (0 main requests) or amber (some benign main request), plus the one-time model count.
+              const unexpected = net.unexpected + ner.unexpectedRequests;
+              const unexpectedHost = net.unexpectedHost ?? ner.unexpectedHost;
+              const dotColor = unexpected > 0 ? "bg-red-500" : net.count === 0 ? "bg-emerald-500" : "bg-amber-500";
+              // Quiet badge: emerald TEXT (no filled pill) only at a true zero; benign counts stay zinc; the
+              // exfiltration alarm stays red. Links to the privacy section. The destination-verification
+              // logic (unexpected host) and the model-loaded status are preserved exactly.
+              const tone =
+                unexpected > 0 ? "text-red-600" : net.count === 0 ? "text-emerald-700" : "text-zinc-500";
+              return (
+                <a
+                  href="#faq"
+                  className={`inline-flex min-h-[44px] max-w-full items-center gap-1.5 rounded text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/20 ${tone}`}
+                  aria-live="polite"
+                >
+                  <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dotColor}`} aria-hidden="true" />
+                  {unexpected > 0 ? (
+                    <span className="truncate font-medium">
+                      {t("trust.badge.unexpected", { host: unexpectedHost ?? "?" })}
+                    </span>
+                  ) : (
+                    <span className={net.count === 0 ? "font-medium" : "tnum"}>
+                      {net.count === 0
+                        ? t("trust.badge.count")
+                        : t("trust.badge.countN", { count: net.count })}
+                      {/* Once the model is loaded, show a STATUS, not a rising request count: the count
+                          includes cache-served requests on reload and misreads as a re-download (it is not —
+                          the model is fetched once and served from the browser cache thereafter). */}
+                      {ner.status === "ready" ? (
+                        <span className="text-zinc-500"> · {t("trust.badge.modelLoaded")}</span>
+                      ) : (
+                        ner.modelRequests > 0 && (
+                          <span className="text-zinc-500"> · {t("trust.badge.model", { count: ner.modelRequests })}</span>
+                        )
+                      )}
+                    </span>
+                  )}
+                </a>
+              );
+            })()}
+          </div>
           <button
             type="button"
             onClick={() => setDemoOpen(true)}
@@ -2602,6 +2630,24 @@ export function App() {
           </div>
         </section>
       </main>
+
+      {/* Early-access teaser for the Chrome extension. Links to the standalone /waitlist.html
+          page (its own relaxed CSP allows the Supabase signup call; this app stays locked). */}
+      <section className="mx-auto mt-24 max-w-2xl px-6">
+        <div className="rounded-3xl border border-zinc-200 bg-zinc-50 px-6 py-10 text-center">
+          <span className="inline-flex items-center rounded-full border border-zinc-300 bg-white px-3 py-1 text-xs font-semibold text-zinc-600">
+            {t("waitlist.badge")}
+          </span>
+          <h2 className="mt-4 text-2xl font-semibold text-ink">{t("waitlist.title")}</h2>
+          <p className="mx-auto mt-3 max-w-md text-zinc-600">{t("waitlist.desc")}</p>
+          <a
+            href="/waitlist.html"
+            className="mt-6 inline-flex min-h-[44px] items-center justify-center rounded-full bg-ink px-6 py-3 font-semibold text-white transition hover:opacity-90"
+          >
+            {t("waitlist.cta")}
+          </a>
+        </div>
+      </section>
 
       <footer className="mx-auto mt-24 max-w-2xl px-6 pb-16 text-center text-xs leading-relaxed text-zinc-500">
         <p className="text-sm text-zinc-600">

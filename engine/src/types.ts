@@ -20,7 +20,10 @@ export type DeterministicEntityType =
   | "IL_LAND" // gush/chelka (גוש/חלקה)
   | "IL_POLICY" // insurance policy number
   | "IL_INSURED" // insured-person number (מבוטח)
-  | "EMAIL_ADDRESS";
+  | "EMAIL_ADDRESS"
+  | "CREDIT_CARD" // 13–19 digit PAN, Luhn-validated (international)
+  | "US_SSN" // US Social Security Number, dashed/spaced form only (avoids IL 9-digit-ID collision)
+  | "US_PHONE"; // North-American (NANP) phone number, structured form only
 
 /** User-added terms to redact (things the automatic detectors missed). Highest priority — an
  * explicit human choice always wins. */
@@ -52,6 +55,9 @@ export const PRIORITY: Readonly<Record<EntityType, number>> = {
   IL_POLICY: 3,
   IL_INSURED: 3,
   EMAIL_ADDRESS: 3,
+  CREDIT_CARD: 3,
+  US_SSN: 3,
+  US_PHONE: 3,
   PERSON: 2,
   ORGANIZATION: 1,
   LOCATION: 1,

@@ -105,6 +105,9 @@ export default defineConfig({
         main: resolve(fileURLToPath(new URL(".", import.meta.url)), "index.html"),
         terms: resolve(fileURLToPath(new URL(".", import.meta.url)), "terms.html"),
         accessibility: resolve(fileURLToPath(new URL(".", import.meta.url)), "accessibility.html"),
+        // Early-access signup for the Chrome extension. Ships its own small JS module (unlike the
+        // static legal pages) and talks to Supabase; its relaxed CSP lives in the repo-root vercel.json.
+        waitlist: resolve(fileURLToPath(new URL(".", import.meta.url)), "waitlist.html"),
       },
     },
   },

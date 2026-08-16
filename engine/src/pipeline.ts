@@ -20,6 +20,9 @@ import { israeliLandRecognizer } from "./recognizers/israeliLand";
 import { israeliPolicyRecognizer } from "./recognizers/israeliPolicy";
 import { israeliInsuredRecognizer } from "./recognizers/israeliInsured";
 import { emailRecognizer } from "./recognizers/email";
+import { creditCardRecognizer } from "./recognizers/creditCard";
+import { usSsnRecognizer } from "./recognizers/usSsn";
+import { usPhoneRecognizer } from "./recognizers/usPhone";
 
 /** All deterministic (regex + checksum / context) recognizers — never the NER model (hard rule 1). */
 export const DETERMINISTIC_RECOGNIZERS: readonly Recognizer[] = [
@@ -34,6 +37,10 @@ export const DETERMINISTIC_RECOGNIZERS: readonly Recognizer[] = [
   israeliInsuredRecognizer,
   emailRecognizer,
   israeliOrgRecognizer,
+  // International (deterministic, validated) — shared by web + extension.
+  creditCardRecognizer,
+  usSsnRecognizer,
+  usPhoneRecognizer,
 ];
 
 /**

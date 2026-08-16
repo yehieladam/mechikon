@@ -17,5 +17,6 @@ test("app loads, is cross-origin isolated, and the worker anonymizes", async ({ 
   await expect(page.getByRole("button", { name: "[PHONE_1]", exact: true })).toBeVisible({ timeout: 15_000 });
 
   // Trust badge: the main network counter stays a true zero on the deterministic path (0-state copy).
-  await expect(page.locator("header")).toContainText("המידע אינו נשלח לשרתים");
+  // The badge lives in the hero (moved out of the header), so assert on the copy, not its container.
+  await expect(page.getByText("המידע אינו נשלח לשרתים")).toBeVisible();
 });
