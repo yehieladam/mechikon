@@ -10,10 +10,10 @@ import { defineManifest } from "@crxjs/vite-plugin";
 // - Zero permissions: a paste/upload popup needs none — keep it that way (Store trust).
 export default defineManifest({
   manifest_version: 3,
-  name: "מחיקון · Mechikon — Hebrew PII Anonymizer",
+  name: "מחיקון · Mechikon — PII Anonymizer for AI Chats",
   version: "0.1.0",
   description:
-    "Mask Hebrew & Israeli personal details before sending them to AI chats — 100% in your browser. Nothing leaves your device.",
+    "Mask Hebrew & English personal details before sending them to ChatGPT, Claude or Gemini — 100% in your browser. Nothing leaves your device.",
   icons: {
     16: "icons/icon-16.png",
     32: "icons/icon-32.png",

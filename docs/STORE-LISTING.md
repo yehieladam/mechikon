@@ -8,13 +8,11 @@ Primary listing language: **English**. A Hebrew variant is provided for the seco
 ## 1. Item name (max 75 chars)
 
 ```
-Mechikon — PII Anonymizer for AI Chats
+מחיקון · Mechikon — PII Anonymizer for AI Chats
 ```
 
-> Note: the manifest `name` is currently `מחיקון · Mechikon — Hebrew PII Anonymizer`.
-> The tool now masks **Hebrew and English** PII, so "Hebrew" undersells it. Decide before
-> submitting: keep as-is, or update the manifest to drop "Hebrew" (the Store name defaults to
-> the manifest name).
+> Matches the manifest `name`. "Hebrew" was dropped from the descriptor since the tool now
+> masks both Hebrew and English PII; the מחיקון brand prefix is kept.
 
 ## 2. Summary / short description (max 132 chars)
 
