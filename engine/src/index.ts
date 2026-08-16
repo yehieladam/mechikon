@@ -43,8 +43,9 @@ export { restore } from "./restore";
 export type { RestoreResult } from "./restore";
 export {
   createHebrewNer,
+  createEnglishNer,
   installTokenizerRegexShim,
   mapNerTag,
   reconstructNerSpans,
 } from "./ner";
-export type { HebrewNer, HebrewNerOptions, RawNerSpan } from "./ner";
+export type { Ner, HebrewNer, NerLoadOptions, RawNerSpan } from "./ner";
