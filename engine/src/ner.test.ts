@@ -58,6 +58,43 @@ describe("reconstructNerSpans — the ## hyphenated-name artifact (the real port
   });
 });
 
+describe("reconstructNerSpans — English (Latin continuation class)", () => {
+  const LATIN = /[A-Za-z]/;
+
+  it("aligns English person/org surfaces with the Latin continuation", () => {
+    const text = "Hello, my name is John Smith and my client is Jane Doe from Acme Corporation.";
+    const spans = reconstructNerSpans(
+      text,
+      [
+        { raw: "PER", surface: "John Smith", score: 0.999 },
+        { raw: "PER", surface: "Jane Doe", score: 0.999 },
+        { raw: "ORG", surface: "Acme Corporation", score: 0.99 },
+      ],
+      LATIN,
+    );
+    expect(spans.map((s) => text.slice(s.start, s.end))).toEqual([
+      "John Smith",
+      "Jane Doe",
+      "Acme Corporation",
+    ]);
+    expect(spans.map((s) => s.type)).toEqual(["PERSON", "PERSON", "ORGANIZATION"]);
+  });
+
+  it("rebuilds a hyphenated Latin name truncated at a ## wordpiece", () => {
+    const text = "The report by Anne-Marie Slaughter was cited.";
+    const spans = reconstructNerSpans(text, [{ raw: "PER", surface: "Anne ##-", score: 0.99 }], /[A-Za-z]/);
+    expect(spans).toHaveLength(1);
+    expect(text.slice(spans[0].start, spans[0].end)).toBe("Anne-Marie");
+  });
+
+  it("drops the model's MISC tag for English too", () => {
+    const text = "The Israeli delegation attended.";
+    expect(reconstructNerSpans(text, [{ raw: "MISC", surface: "Israeli", score: 1 }], /[A-Za-z]/)).toEqual(
+      [],
+    );
+  });
+});
+
 describe("reconstructNerSpans — alignment behaviour", () => {
   it("skips a span whose surface is not in the text", () => {
     expect(reconstructNerSpans("טקסט ללא הישות", [{ raw: "PER", surface: "משה כהן", score: 1 }])).toEqual(

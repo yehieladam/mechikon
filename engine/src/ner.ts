@@ -41,6 +41,8 @@ export function mapNerTag(raw: string): NerEntityType | null {
 
 /** Hebrew letters incl. finals (U+05D0–U+05EA) — used to extend across `##`-truncated names. */
 const HEBREW_LETTER = /[א-ת]/;
+/** Latin letters — the English continuation class (extends across `##`-truncated Latin names). */
+const LATIN_LETTER = /[A-Za-z]/;
 /** Hebrew points/cantillation (niqqud) — stripped before matching so a niqqud-bearing name in the PDF
  *  text still matches a model seed that dropped the points (H-nerspan). */
 const NIQQUD = /[֑-ׇ]/;
@@ -93,8 +95,15 @@ function seedSearchShadow(text: string): { shadow: string; map: number[] } {
  * whitespace-flexible and niqqud-insensitive (via a normalized shadow + offset map), so names split by
  * a line break / double space / niqqud are still found — but only a REAL occurrence ever matches; a
  * seed that isn't present is skipped defensively (never guesses an offset).
+ *
+ * `continuation` is the letter class used to extend a match across a `##`-truncated wordpiece
+ * continuation — Hebrew by default (dictabert), Latin for the English model.
  */
-export function reconstructNerSpans(text: string, rawSpans: readonly RawNerSpan[]): Span[] {
+export function reconstructNerSpans(
+  text: string,
+  rawSpans: readonly RawNerSpan[],
+  continuation: RegExp = HEBREW_LETTER,
+): Span[] {
   const { shadow, map } = seedSearchShadow(text);
   const spans: Span[] = [];
   let shadowCursor = 0;
@@ -119,7 +128,7 @@ export function reconstructNerSpans(text: string, rawSpans: readonly RawNerSpan[
     const start = map[shadowStart];
     let end = map[shadowEnd - 1] + 1;
     // Extend across a `##`-truncated wordpiece continuation (hyphenated names), in ORIGINAL text.
-    while (end < text.length && HEBREW_LETTER.test(text[end])) {
+    while (end < text.length && continuation.test(text[end])) {
       end += 1;
     }
     spans.push({ start, end, type, score: rawSpan.score });
@@ -172,10 +181,30 @@ export function installTokenizerRegexShim(): void {
   g.__nerRegexShim = true;
 }
 
-const MODEL_ID = "onnx-community/dictabert-ner-ONNX";
-const DTYPE = "q8"; // int8 — q8 parity proven in Phase 0
+/** Per-model config. `continuation` is the letter class reconstructNerSpans extends across `##`. */
+interface NerModelConfig {
+  readonly modelId: string;
+  /** ONNX weight precision. q8 (int8) parity is proven for both models. */
+  readonly dtype: "q8";
+  readonly continuation: RegExp;
+}
 
-export interface HebrewNerOptions {
+/** Hebrew: dictabert-ner (q8 parity proven in Phase 0). Latin continuation would be wrong here. */
+const HEBREW_CONFIG: NerModelConfig = {
+  modelId: "onnx-community/dictabert-ner-ONNX",
+  dtype: "q8",
+  continuation: HEBREW_LETTER,
+};
+
+/** English: dslim/bert-base-NER (Xenova ONNX port). q8 `model_quantized.onnx` is ~104 MB, downloaded
+ *  ONCE and Cache-Storage cached — only for users whose text is English (lazy, never for Hebrew-only). */
+const ENGLISH_CONFIG: NerModelConfig = {
+  modelId: "Xenova/bert-base-NER",
+  dtype: "q8",
+  continuation: LATIN_LETTER,
+};
+
+export interface NerLoadOptions {
   /**
    * WASM by default — it beats WebGPU on integrated GPUs (Phase-0 finding). `cpu` is the
    * onnxruntime-node execution provider, used only by the node recall harness (the browser has no
@@ -189,19 +218,28 @@ export interface HebrewNerOptions {
    * Set before the pipeline compiles.
    */
   readonly numThreads?: number;
+  /**
+   * Directory the ONNX WASM runtime files are served from (trailing slash). The web app leaves this
+   * unset so transformers uses its default CDN (cdn.jsdelivr.net, allowed via CSP). The MV3 extension
+   * MUST set it to a local `chrome.runtime.getURL("vendor/ort/")` — remote runtime code is CSP-blocked.
+   */
+  readonly wasmPaths?: string;
 }
 
 /** Async detection facade — same span shape as the deterministic recognizers. */
-export interface HebrewNer {
+export interface Ner {
   recognize(text: string): Promise<readonly Span[]>;
 }
 
+/** Back-compat alias — the Hebrew and English recognizers share one shape. */
+export type HebrewNer = Ner;
+
 /**
- * Load the dictabert-ner pipeline (applies the shim first) and return an async recognizer. The
- * model is imported dynamically so this module carries no top-level transformers.js cost — pure
- * helpers above stay unit-testable without the 185 MB model.
+ * Load a token-classification pipeline (applies the shim first) and return an async recognizer.
+ * `@huggingface/transformers` is imported dynamically so this module carries no top-level cost — the
+ * pure helpers above stay unit-testable without ever downloading a model.
  */
-export async function createHebrewNer(options: HebrewNerOptions = {}): Promise<HebrewNer> {
+async function createNer(config: NerModelConfig, options: NerLoadOptions): Promise<Ner> {
   installTokenizerRegexShim();
   const transformers = await import("@huggingface/transformers");
   // Load the model from the remote host, never a same-origin /models path: a SPA dev/prod server
@@ -212,10 +250,14 @@ export async function createHebrewNer(options: HebrewNerOptions = {}): Promise<H
   if (options.numThreads !== undefined && wasmBackend) {
     wasmBackend.numThreads = options.numThreads;
   }
+  if (options.wasmPaths !== undefined && wasmBackend) {
+    // Load the ORT runtime from the bundled local copy instead of the default remote CDN (MV3 CSP).
+    wasmBackend.wasmPaths = options.wasmPaths;
+  }
   const { pipeline } = transformers;
-  const classifier = await pipeline("token-classification", MODEL_ID, {
+  const classifier = await pipeline("token-classification", config.modelId, {
     device: options.device ?? "wasm",
-    dtype: DTYPE,
+    dtype: config.dtype,
     progress_callback: options.progressCallback,
   });
 
@@ -229,7 +271,21 @@ export async function createHebrewNer(options: HebrewNerOptions = {}): Promise<H
         surface: entity.word,
         score: Number(entity.score),
       }));
-      return reconstructNerSpans(text, rawSpans);
+      return reconstructNerSpans(text, rawSpans, config.continuation);
     },
   };
+}
+
+/** Hebrew NER — `onnx-community/dictabert-ner-ONNX` (~185 MB, q8). Detects names/orgs/places. */
+export function createHebrewNer(options: NerLoadOptions = {}): Promise<Ner> {
+  return createNer(HEBREW_CONFIG, options);
+}
+
+/**
+ * English NER — `Xenova/bert-base-NER` (~104 MB, q8). Same span shape and entity types (PER/ORG/LOC;
+ * MISC is dropped by mapNerTag). Loaded lazily ONLY for English text so Hebrew-only users never pay
+ * for it.
+ */
+export function createEnglishNer(options: NerLoadOptions = {}): Promise<Ner> {
+  return createNer(ENGLISH_CONFIG, options);
 }

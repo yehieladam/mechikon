@@ -1,6 +1,7 @@
 // ESLint 9 flat config (the single source of lint truth — there is intentionally NO
 // .eslintrc / .eslintignore; ESLint 9 does not read .eslintignore, ignores live below).
 import js from "@eslint/js";
+import globals from "globals";
 import tseslint from "typescript-eslint";
 import reactHooks from "eslint-plugin-react-hooks";
 
@@ -14,13 +15,21 @@ export default tseslint.config(
       "browser-poc/**",
       // Throwaway feasibility spikes (Node .mjs scripts), kept for reference — not product code.
       "spikes/**",
+      // Phase-0 throwaway editor-replace spike (plain JS, browser+chrome globals) — not product code.
+      "spike/**",
       "dist/**",
       "dist-web/**",
       "node_modules/**",
+      // Claude Code local session data incl. throwaway git worktrees (full repo copies) — never lint.
+      ".claude/**",
       // Vendored third-party OCR runtime (minified worker + wasm glue), fetched at build — never lint.
       "web/public/vendor/**",
+      // Vendored ONNX runtime for the extension (minified ORT glue), copied at build — never lint.
+      "public/vendor/**",
       // Local screenshot/verification scratch scripts (not product code, not committed).
       "_*.mjs",
+      // Throwaway local repro harness (gitignored) — not product code.
+      "scratch-e2e/**",
       // Node build-time tooling for test fixtures (uses node globals), not shipped product code.
       "web/test-fixtures/**/*.mjs",
       // Node build/setup scripts (vendor assets, uses node globals), not shipped product code.
@@ -35,6 +44,14 @@ export default tseslint.config(
     rules: {
       "react-hooks/rules-of-hooks": "error",
       "react-hooks/exhaustive-deps": "warn",
+    },
+  },
+  {
+    // Extension runtime code (content script, offscreen doc, service worker) runs in the browser
+    // with the chrome.* API — declare those globals so no-undef doesn't flag them.
+    files: ["src/**/*.{ts,tsx}"],
+    languageOptions: {
+      globals: { ...globals.browser, ...globals.webextensions },
     },
   },
   {
@@ -66,6 +83,18 @@ export default tseslint.config(
       // a justified exception uses eslint-disable-next-line WITH the reason comment.
       "@typescript-eslint/no-explicit-any": "error",
       "no-console": "error",
+    },
+  },
+  {
+    // Extension e2e harness: Playwright specs (node) whose page.evaluate bodies run in the BROWSER,
+    // plus a node fixture server. Allow both global sets and console (test tooling, not shipped).
+    // MUST come after the global no-console block so it wins for these files.
+    files: ["e2e-ext/**/*.{ts,mjs}"],
+    languageOptions: {
+      globals: { ...globals.browser, ...globals.node },
+    },
+    rules: {
+      "no-console": "off",
     },
   },
 );

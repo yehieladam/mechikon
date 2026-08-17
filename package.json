@@ -10,6 +10,7 @@
   },
   "scripts": {
     "dev": "vite",
+    "prebuild": "node scripts/vendor-ort.mjs",
     "build": "vite build",
     "dev:web": "vite --config web/vite.config.ts",
     "vendor:ocr": "node scripts/fetch-tesseract-assets.mjs",
@@ -26,7 +27,9 @@
     "test:e2e": "playwright test --grep-invert @model",
     "pretest:e2e": "npm run fixtures:pdf",
     "pretest": "npm run fixtures:pdf",
-    "test:e2e:model": "playwright test --grep @model"
+    "test:e2e:model": "playwright test --grep @model",
+    "test:e2e:ext": "playwright test --config playwright.ext.config.ts",
+    "pack": "npm run build && node scripts/pack-extension.mjs"
   },
   "dependencies": {
     "@huggingface/transformers": "4.2.0",
@@ -44,6 +47,7 @@
     "@crxjs/vite-plugin": "^2.0.0",
     "@eslint/js": "^9.32.0",
     "@playwright/test": "^1.62.1",
+    "@types/chrome": "^0.2.5",
     "@types/node": "^26.1.2",
     "@types/react": "^18.3.23",
     "@types/react-dom": "^18.3.7",

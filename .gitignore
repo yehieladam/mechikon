@@ -42,3 +42,13 @@ web/public/vendor/
 scripts/*.jsonl
 scripts/*.log
 scripts/ocr-calibration*.json
+
+# Claude Code local session data
+.claude/
+public/vendor/
+
+# local e2e repro harness (not shipped)
+scratch-e2e/
+
+# Web Store package (build artifact)
+mechikon-extension-*.zip

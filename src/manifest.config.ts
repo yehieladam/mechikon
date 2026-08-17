@@ -10,14 +10,59 @@ import { defineManifest } from "@crxjs/vite-plugin";
 // - Zero permissions: a paste/upload popup needs none — keep it that way (Store trust).
 export default defineManifest({
   manifest_version: 3,
-  name: "מחיקון — Hebrew PII Anonymizer (dev build)",
+  name: "מחיקון · Mechikon — PII Anonymizer for AI Chats",
   version: "0.1.0",
   description:
-    "Anonymize Israeli PII in Hebrew text, fully in your browser. Nothing leaves your device.",
+    "Mask Hebrew & English personal details before sending them to ChatGPT, Claude or Gemini — 100% in your browser. Nothing leaves your device.",
+  icons: {
+    16: "icons/icon-16.png",
+    32: "icons/icon-32.png",
+    48: "icons/icon-48.png",
+    128: "icons/icon-128.png",
+  },
   action: {
     default_popup: "src/popup/index.html",
+    default_icon: {
+      16: "icons/icon-16.png",
+      32: "icons/icon-32.png",
+      48: "icons/icon-48.png",
+      128: "icons/icon-128.png",
+    },
   },
+  permissions: ["storage", "offscreen"],
+  // Lets the extension fetch the NER model cross-origin from HF without CORS ("Failed to fetch"):
+  // connect-src in the CSP allows the request, but host_permissions is what bypasses CORS. Weights
+  // redirect to the regional *.hf.co Xet CDN, so both hosts are listed. No user data is ever sent.
+  host_permissions: [
+    "https://huggingface.co/*",
+    "https://*.huggingface.co/*",
+    "https://*.hf.co/*",
+  ],
+  background: {
+    service_worker: "src/background/index.ts",
+    type: "module",
+  },
+  // Inline redaction inside AI chat composers. Fixed host list (Store trust) — never <all_urls>.
+  // The deterministic engine is pure JS and runs in the content script's isolated world; no host
+  // permissions needed beyond these matches, and no model (NER is added later via an offscreen doc).
+  content_scripts: [
+    {
+      matches: [
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*",
+        "https://claude.ai/*",
+        "https://gemini.google.com/*",
+        // E2E-only: injected on localhost when MECHIKON_E2E is set at build time. Never in a real build.
+        ...(process.env.MECHIKON_E2E ? ["http://localhost:5599/*"] : []),
+      ],
+      js: ["src/content/index.ts"],
+      run_at: "document_idle",
+    },
+  ],
   content_security_policy: {
+    // MV3 forbids blob: in worker-src and is strict here. ORT runs single-threaded (numThreads 1), so no
+    // blob worker is needed. Model weights download over HF (redirect to the regional *.hf.co Xet CDN);
+    // the ORT runtime is vendored locally (script-src 'self'), so no CDN is allowed for code.
     extension_pages:
       "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' https://huggingface.co https://*.huggingface.co https://*.hf.co",
   },
