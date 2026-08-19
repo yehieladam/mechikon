@@ -41,13 +41,14 @@ const he = {
   popRestore: "שחזר בחירה",
   btnHide: "הסתר",
   btnPick: "בחר ידנית",
-  btnRestore: "שחזר",
+  btnRestore: "שחזר תשובה",
   pickActive: "● בחירה פעילה",
   pickModeToast: "מצב בחירה: לחצו על מילים להסתרה (Esc ליציאה)",
   // --- content: chip states ---
-  detectedCount: (p: Params) => `${p.n} פרטים רגישים`,
+  detectedCount: (p: Params) => (Number(p.n) === 1 ? "פרט רגיש אחד" : `${p.n} פרטים רגישים`),
   maskingNames: "מסתיר שמות…",
-  protectedCount: (p: Params) => `מוגן · ${p.n} הוסתרו`,
+  protectedCount: (p: Params) =>
+    Number(p.n) === 1 ? "מוגן · הוסתר פרט אחד" : `מוגן · ${p.n} הוסתרו`,
   protectedLabel: "מוגן",
   pickWhat: "בחר מה להסתיר",
   // --- content: toasts ---
@@ -55,11 +56,13 @@ const he = {
   notFoundToHide: (p: Params) => `לא נמצא "${p.v}" להסתרה`,
   notFoundInBox: (p: Params) => `לא נמצא "${p.v}" בתיבה`,
   cannotHideSelection: "לא ניתן להסתיר את הבחירה",
-  hiddenWithInstruction: (p: Params) => `הוסתרו ${p.n} פרטים · נוספה הנחיה`,
+  hiddenWithInstruction: (p: Params) =>
+    Number(p.n) === 1 ? "הוסתר פרט אחד · נוספה הנחיה" : `הוסתרו ${p.n} פרטים · נוספה הנחיה`,
   scannedWaitingNames: "נסרק — ממתין לזיהוי שמות",
-  alsoHidNames: (p: Params) => `הוסתרו גם ${p.n} שמות/ארגונים`,
+  alsoHidNames: (p: Params) =>
+    Number(p.n) === 1 ? "הוסתר גם שם/ארגון אחד" : `הוסתרו גם ${p.n} שמות/ארגונים`,
   nothingToRestore: "אין מה לשחזר עדיין — קודם הסתירו פרטים",
-  restoredPlaces: (p: Params) => `שוחזר ב-${p.n} מקומות`,
+  restoredPlaces: (p: Params) => (Number(p.n) === 1 ? "שוחזר במקום אחד" : `שוחזר ב-${p.n} מקומות`),
   noTokensOnPage: "לא נמצאו סימונים לשחזור בעמוד",
   restoredUnmatched: (p: Params) => `שוחזר — ${p.n} סימונים לא זוהו`,
   restored: "שוחזר",
@@ -116,7 +119,7 @@ const en: Record<keyof typeof he, Entry> = {
   popRestore: "Restore selection",
   btnHide: "Hide",
   btnPick: "Select manually",
-  btnRestore: "Restore",
+  btnRestore: "Restore reply",
   pickActive: "● Picking",
   pickModeToast: "Pick mode: click words to hide (Esc to exit)",
   detectedCount: (p) => `${p.n} sensitive ${Number(p.n) === 1 ? "item" : "items"}`,

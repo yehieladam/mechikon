@@ -32,10 +32,28 @@ export function getText(el: Composer): string {
   if (isInput(el)) {
     return el.value;
   }
-  // innerText (not textContent) so line breaks between the editor's inner blocks/<br> are preserved —
-  // textContent glues every paragraph into one line, which then gets written back as a single flat line
-  // and mangles multi-line drafts. Fall back to textContent if innerText is unavailable.
+  // Rich editors (ProseMirror/Lexical/Quill) build one block element per line. `innerText` inserts
+  // TWO "\n" at each block boundary (a <p>'s required-line-break-count is 2), but setWholeText writes
+  // back through insertText, which turns every "\n" into a NEW paragraph. So an innerText round-trip
+  // inflates one paragraph break into an empty paragraph, and repeated masking stacks blank lines
+  // (BUG 2). Read one "\n" per top-level block instead, so getText and setWholeText are symmetric.
+  const blocks = Array.from(el.children).filter(
+    (c): c is HTMLElement => c instanceof HTMLElement,
+  );
+  if (blocks.length > 0) {
+    return blocksToText(blocks);
+  }
+  // Fall back to innerText (line breaks preserved) / textContent for editors without block children.
   return el.innerText ?? el.textContent ?? "";
+}
+
+/**
+ * Join top-level editor blocks into text with ONE "\n" per block (extracted from getText so the
+ * join is unit-testable without a DOM). A trailing block break inside a block's own innerText is
+ * dropped so an empty paragraph becomes exactly one blank line — see the BUG 2 note in getText.
+ */
+export function blocksToText(blocks: readonly { readonly innerText: string }[]): string {
+  return blocks.map((b) => b.innerText.replace(/\n+$/, "")).join("\n");
 }
 
 /** Replace the entire composer content with `text`, as one native edit. */
@@ -51,7 +69,19 @@ export function setWholeText(el: Composer, text: string): boolean {
   range.selectNodeContents(el);
   sel?.removeAllRanges();
   sel?.addRange(range);
-  return document.execCommand("insertText", false, text);
+  const ok = document.execCommand("insertText", false, text);
+  // Some editors (Gemini's Quill) DELETE the selected content on insertText but then reject the
+  // insert, wiping the whole composer (confirmed: the user's draft vanished and Ctrl+Z brought it
+  // back — the delete is on the undo stack). Detect the empty-out wipe and repopulate directly so a
+  // manual mask can never clear the user's text. The direct DOM insert may bypass the editor's model,
+  // but preserving the draft beats losing it — the tokens still read back via textContent.
+  if (text.length > 0 && getText(el).length === 0) {
+    range.selectNodeContents(el);
+    range.deleteContents();
+    range.insertNode(document.createTextNode(text));
+    return true;
+  }
+  return ok;
 }
 
 /** Set a React-controlled input's value via the native setter so React's onChange still fires. */
@@ -192,8 +222,9 @@ function wrapTokens(textNode: Text): void {
     const chip = document.createElement("span");
     chip.textContent = match[0];
     chip.dataset.mechikonTok = "1";
+    // cursor:pointer signals the chip is clickable — click-to-unmask (see index.ts mousedown handler).
     chip.style.cssText =
-      "background:rgba(52,199,89,.20);color:#0a7d38;border-radius:4px;padding:0 3px;font-weight:600;";
+      "background:rgba(52,199,89,.20);color:#0a7d38;border-radius:4px;padding:0 3px;font-weight:600;cursor:pointer;";
     fragment.appendChild(chip);
     last = match.index + match[0].length;
   }
@@ -201,6 +232,48 @@ function wrapTokens(textNode: Text): void {
     fragment.appendChild(document.createTextNode(text.slice(last)));
   }
   textNode.parentNode?.replaceChild(fragment, textNode);
+}
+
+/**
+ * The exact placeholder token (e.g. "[NAME_1]") under a screen point, or null when the point isn't
+ * inside one. Used by click-to-unmask (pick mode): clicking an already-masked value should reveal it
+ * again instead of being silently ignored by wordAround's "never nest tokens" guard below.
+ */
+export function tokenAtPoint(x: number, y: number): string | null {
+  let node: Node | null = null;
+  let offset = 0;
+  const doc = document as Document & {
+    caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+  };
+  if (typeof document.caretRangeFromPoint === "function") {
+    const range = document.caretRangeFromPoint(x, y);
+    node = range?.startContainer ?? null;
+    offset = range?.startOffset ?? 0;
+  } else if (doc.caretPositionFromPoint) {
+    const pos = doc.caretPositionFromPoint(x, y);
+    node = pos?.offsetNode ?? null;
+    offset = pos?.offset ?? 0;
+  }
+  if (!node || node.nodeType !== Node.TEXT_NODE) {
+    return null;
+  }
+  return tokenAround((node as Text).nodeValue ?? "", offset);
+}
+
+/** The full `[LABEL_n]` token containing `offset` in `text`, or null. Extracted from tokenAtPoint so
+ *  the boundary logic is unit-testable without a live caret (mirrors wordAround/wordAtPoint below). */
+export function tokenAround(text: string, offset: number): string | null {
+  TOKEN.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = TOKEN.exec(text)) !== null) {
+    const start = match.index;
+    const end = start + match[0].length;
+    // Inclusive on both edges so a click right on the brackets still counts.
+    if (offset >= start && offset <= end) {
+      return match[0];
+    }
+  }
+  return null;
 }
 
 /** The whole word/number under a screen point (letters+digits run), or null. Used by click-to-hide:
@@ -223,22 +296,45 @@ export function wordAtPoint(x: number, y: number): string | null {
   if (!node || node.nodeType !== Node.TEXT_NODE) {
     return null;
   }
-  const text = (node as Text).nodeValue ?? "";
+  return wordAround((node as Text).nodeValue ?? "", offset);
+}
+
+/**
+ * The whole non-whitespace unit around `offset` in `text`, with edge punctuation trimmed — or null.
+ * Extracted from wordAtPoint so the boundary logic is unit-testable without a live caret.
+ *
+ * A unit is a run of non-whitespace (mirrors the popup's `text.split(/\s+/)`), so INTERNAL punctuation
+ * stays part of the value: "בן-גוריון", "ג'ון", "050-1234567", "dan@gmail.com" come back whole
+ * (BUG 1 — the old letters+digits-only run cut them at the first inner '-'/'\''/'@'/'.'). Only leading
+ * and trailing non-alphanumerics are trimmed, exactly like the popup's `splitToken`.
+ */
+export function wordAround(text: string, offset: number): string | null {
+  const isSpace = (ch: string) => /\s/.test(ch);
   const isWord = (ch: string) => /[\p{L}\p{N}]/u.test(ch);
   let i = offset;
-  if (i >= text.length || !isWord(text[i])) {
-    i -= 1; // a click on the right edge lands one past the last char
+  if (i >= text.length || isSpace(text[i])) {
+    i -= 1; // a click on the right edge (or a space) lands one past the intended char
   }
-  if (i < 0 || !isWord(text[i])) {
+  if (i < 0 || isSpace(text[i])) {
     return null;
   }
   let start = i;
   let end = i + 1;
-  while (start > 0 && isWord(text[start - 1])) {
+  while (start > 0 && !isSpace(text[start - 1])) {
     start -= 1;
   }
-  while (end < text.length && isWord(text[end])) {
+  while (end < text.length && !isSpace(text[end])) {
     end += 1;
+  }
+  // Trim edge punctuation (parentheses, trailing period, quotes) but keep the run's inner characters.
+  while (start < end && !isWord(text[start])) {
+    start += 1;
+  }
+  while (end > start && !isWord(text[end - 1])) {
+    end -= 1;
+  }
+  if (start >= end) {
+    return null;
   }
   // Reject a click INSIDE an existing placeholder token, e.g. the "NUM"/"1" of "[NUM_1]" — masking
   // those would nest tokens and orphan the original mapping (breaking restore).

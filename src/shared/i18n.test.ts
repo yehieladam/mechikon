@@ -38,4 +38,21 @@ describe("t", () => {
     expect(t("en", "detectedCount", { n: 1 })).toBe("1 sensitive item");
     expect(t("en", "detectedCount", { n: 3 })).toBe("3 sensitive items");
   });
+
+  test("uses correct Hebrew singular grammar (not '1 X' with a plural noun/verb)", () => {
+    expect(t("he", "detectedCount", { n: 1 })).toBe("פרט רגיש אחד");
+    expect(t("he", "detectedCount", { n: 3 })).toBe("3 פרטים רגישים");
+
+    expect(t("he", "protectedCount", { n: 1 })).toBe("מוגן · הוסתר פרט אחד");
+    expect(t("he", "protectedCount", { n: 3 })).toBe("מוגן · 3 הוסתרו");
+
+    expect(t("he", "hiddenWithInstruction", { n: 1 })).toBe("הוסתר פרט אחד · נוספה הנחיה");
+    expect(t("he", "hiddenWithInstruction", { n: 3 })).toBe("הוסתרו 3 פרטים · נוספה הנחיה");
+
+    expect(t("he", "alsoHidNames", { n: 1 })).toBe("הוסתר גם שם/ארגון אחד");
+    expect(t("he", "alsoHidNames", { n: 3 })).toBe("הוסתרו גם 3 שמות/ארגונים");
+
+    expect(t("he", "restoredPlaces", { n: 1 })).toBe("שוחזר במקום אחד");
+    expect(t("he", "restoredPlaces", { n: 3 })).toBe("שוחזר ב-3 מקומות");
+  });
 });
