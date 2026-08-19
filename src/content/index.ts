@@ -24,6 +24,7 @@ import {
   isInput,
   replaceSelection,
   setWholeText,
+  tokenAtPoint,
   wordAtPoint,
   type Composer,
 } from "./editor";
@@ -37,7 +38,10 @@ let uiLang: Lang = defaultLang();
 // before that call, or accessing them hits the `let`/`const` temporal dead zone and the whole content
 // script throws at load (a runtime error tsc/build do not catch).
 const CHIP_POS_KEY = "chipPos.v1";
-let reclampChipPosition: () => void = () => {};
+let repositionChip: () => void = () => {};
+// True once the user has dragged the chip (or a dragged position was restored from storage) — their
+// placement then overrides the auto-tracking in makeDraggable's autoTrack(), permanently.
+let userPositioned = false;
 
 // ---- UI (shadow DOM, immune to host page CSS) ---------------------------------------
 // The selection popover's current action, invoked on the button's mousedown (set in refreshPopover).
@@ -57,7 +61,9 @@ function mountUi() {
     :host {
       --ink: #0a0a0a;
       --orange: #ff9500;   /* detected  */
-      --green: #34c759;    /* protected */
+      --green: #34c759;    /* protected — reserved for the TRUE fully-protected state, never "pending" */
+      --yellow: #facc15;   /* pending — distinct from both detected (orange) and protected (green) so a
+                               quick glance never misreads "still working" as "safe" */
       --glass-card: rgba(255,255,255,.4);
       --glass-btn: rgba(12,12,12,.84);
       --hairline: rgba(0,0,0,.10);
@@ -100,10 +106,10 @@ function mountUi() {
       0%, 100% { box-shadow: 0 0 0 4px rgba(255,149,0,.18); }
       50% { box-shadow: 0 0 0 8px rgba(255,149,0,.04); }
     }
-    .dot.pending { background: var(--green); box-shadow: 0 0 0 4px rgba(52,199,89,.14); }
+    .dot.pending { background: var(--yellow); box-shadow: 0 0 0 4px rgba(250,204,21,.18); }
     .dot.pending::after {
       content: ""; position: absolute; inset: -5px; border-radius: 50%;
-      border: 2px solid transparent; border-top-color: var(--green); animation: spin .8s linear infinite;
+      border: 2px solid transparent; border-top-color: var(--yellow); animation: spin .8s linear infinite;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
     .dot.green {
@@ -232,10 +238,12 @@ function mountUi() {
   return { chipLabel, chip, dot, chipBtn, pickBtn, restoreBtn, pop, popBtn, toast };
 }
 
-// ---- drag: let the user move the chip so it never covers the composer / send button --------
+// ---- position: keep the chip clear of the composer's own text (never overlap what the user is
+// typing) while staying clear of the send button, and let a manual drag permanently override it ----
 
-/** Drag the chip by its body (buttons excluded). Position persists in chrome.storage.local and is
- *  clamped to the viewport on restore + on resize so it can never end up off-screen. */
+/** Drag the chip by its body (buttons excluded). A drag is a permanent override: once the user has
+ *  moved the chip, we stop auto-tracking the composer and only re-clamp the dragged position to the
+ *  viewport (persisted in chrome.storage.local, same as before). */
 function makeDraggable(chip: HTMLElement) {
   let startX = 0;
   let startY = 0;
@@ -268,6 +276,7 @@ function makeDraggable(chip: HTMLElement) {
     }
     dragging = false;
     chip.classList.remove("dragging");
+    userPositioned = true; // the user's own placement wins from now on — stop auto-tracking
     document.removeEventListener("pointermove", onMove, true);
     document.removeEventListener("pointerup", onUp, true);
     document.removeEventListener("pointercancel", onUp, true);
@@ -300,22 +309,72 @@ function makeDraggable(chip: HTMLElement) {
     document.addEventListener("pointercancel", onUp, true); // touch scroll/gesture cancels the drag
   });
 
-  // Re-clamp to the current viewport. Exposed so it can run when the chip first becomes visible
-  // (it's display:none at restore, so its height is 0 then and can't be clamped against yet).
-  reclampChipPosition = () => {
+  /** After a manual drag (or a restored drag position), just re-clamp to the current viewport —
+   *  never re-derive from the composer, or the user's own placement would be overridden. */
+  const reclampDragged = () => {
     if (chip.style.left) {
       pin(parseFloat(chip.style.left), parseFloat(chip.style.top));
     }
   };
 
-  // Restore the saved position (if any) and keep it on-screen when the window resizes.
+  /** Auto-anchor the chip OUTSIDE the active composer's box — below it if there's room, else above it
+   *  — so it never sits on top of the text the user is writing (the bug: a fixed bottom-left corner
+   *  gets swallowed by a tall/multi-line draft). Horizontally pinned to the composer's own left edge —
+   *  never the right, where the send button lives (see the note above the `.chip` rule). Falls back to
+   *  the stylesheet default (bottom-left corner) when no composer is available. No-op once the user
+   *  has dragged the chip themselves (see `userPositioned`). */
+  const autoTrack = () => {
+    const composer = lastComposer && lastComposer.isConnected ? lastComposer : null;
+    if (!composer) {
+      chip.style.left = "";
+      chip.style.top = "";
+      chip.style.right = "";
+      chip.style.bottom = "";
+      return;
+    }
+    const rect = composer.getBoundingClientRect();
+    const chipW = chip.offsetWidth || 260;
+    const chipH = chip.offsetHeight || 64;
+    const margin = 16;
+    let top = rect.bottom + margin; // prefer just under the composer
+    if (top + chipH > window.innerHeight - margin) {
+      top = rect.top - chipH - margin; // no room below — float above it instead
+    }
+    top = Math.min(Math.max(margin, top), Math.max(margin, window.innerHeight - chipH - margin));
+    const left = Math.min(
+      Math.max(margin, rect.left),
+      Math.max(margin, window.innerWidth - chipW - margin),
+    );
+    chip.style.left = `${left}px`;
+    chip.style.top = `${top}px`;
+    chip.style.right = "auto";
+    chip.style.bottom = "auto";
+  };
+
+  // Exposed so updateChip() can (re)position once the chip is actually visible (it's display:none
+  // before the first detection pass, so its height is 0 and can't be measured yet), and so
+  // resize/scroll below stay in sync with whichever mode — auto-tracked or user-dragged — is active.
+  repositionChip = () => {
+    if (userPositioned) {
+      reclampDragged();
+    } else {
+      autoTrack();
+    }
+  };
+
+  // Restore a previously-dragged position (if any) — that's a permanent override too.
   void chrome.storage.local.get(CHIP_POS_KEY).then((bag) => {
     const saved = bag[CHIP_POS_KEY] as { left: number; top: number } | undefined;
     if (saved && Number.isFinite(saved.left) && Number.isFinite(saved.top)) {
+      userPositioned = true;
       pin(saved.left, saved.top);
     }
   });
-  window.addEventListener("resize", () => reclampChipPosition());
+  // The composer's rect (and the viewport) can change without a "detect" pass — a window resize, or
+  // the host page/composer scrolling. Capture phase so a scroll inside a nested container (which
+  // doesn't bubble) still reaches this listener.
+  window.addEventListener("resize", () => repositionChip());
+  window.addEventListener("scroll", () => repositionChip(), true);
 }
 
 // ---- click-to-hide: pick mode --------------------------------------------------------
@@ -442,6 +501,15 @@ function applyLang(lang: Lang) {
   paintPickBtn();
 }
 
+/** The placeholder token minted for `value` in this session (e.g. "[TERM_3]"), or null if it was never
+ *  masked. Manual masks (pick mode / the selection popover) are always type MANUAL, so `type` alone
+ *  isn't a meaningful category to show — the token is: it's already the exact green chip visible in
+ *  the composer, so echoing it in a toast confirms the right value matched without repeating the raw
+ *  sensitive value back onto the screen. */
+function placeholderFor(value: string): string | null {
+  return session.rows.find((row) => row.original === value)?.placeholder ?? null;
+}
+
 document.addEventListener(
   "mousedown",
   (event) => {
@@ -451,6 +519,27 @@ document.addEventListener(
     const editable = closestEditable(event.target as Node | null);
     if (!editable) {
       return; // click outside a composer (e.g. our own UI) — ignore
+    }
+    // A click landing on an EXISTING token un-masks just that value (every repeat of it) back to the
+    // original — the inverse of the mask click below. Checked FIRST so a click inside "[NAME_1]" never
+    // falls through to wordAtPoint's "never nest tokens" rejection; it now does something useful.
+    const token = tokenAtPoint(event.clientX, event.clientY);
+    if (token) {
+      event.preventDefault();
+      event.stopPropagation();
+      const src = getText(editable);
+      const { text: original, unmatched } = session.restore(token);
+      if (unmatched.length > 0 || original === token) {
+        showToast(t(uiLang, "notFoundInBox", { v: token }), "info");
+        return;
+      }
+      // Un-mask every repeat of this exact token in the composer — mirrors how masking a value catches
+      // every repeat of it (see the module note above).
+      const next = src.split(token).join(original);
+      writeWithInstruction(editable, next, false); // restoring — no new AI instruction needed
+      showToast(t(uiLang, "restored"));
+      updateChip();
+      return;
     }
     const word = wordAtPoint(event.clientX, event.clientY);
     if (!word || word.trim().length === 0) {
@@ -465,7 +554,7 @@ document.addEventListener(
     // composer still needs the substitution, or the click looks like it did nothing.
     if (text !== src) {
       writeWithInstruction(editable, text, true);
-      showToast(t(uiLang, "hiddenValue", { v: word }));
+      showToast(t(uiLang, "hiddenValue", { v: placeholderFor(word) ?? word }));
       updateChip();
     } else {
       showToast(t(uiLang, "notFoundToHide", { v: word }), "info");
@@ -480,11 +569,13 @@ function keepFocus(btn: HTMLElement) {
 }
 
 type ToastKind = "ok" | "error" | "info";
+let toastTimer = 0;
 function showToast(text: string, kind: ToastKind = "ok") {
+  window.clearTimeout(toastTimer); // a fresh toast must not be hidden early by a stale prior timer
   ui.toast.textContent = text;
   ui.toast.dataset.kind = kind;
   ui.toast.style.display = "flex";
-  window.setTimeout(() => (ui.toast.style.display = "none"), 4000);
+  toastTimer = window.setTimeout(() => (ui.toast.style.display = "none"), 4000);
 }
 
 /** Sensitive values found but not yet redacted: amber pulsing dot + count + הסתר (and שחזר if a key exists). */
@@ -742,8 +833,9 @@ function updateChip() {
     hideChip();
     return;
   }
-  // The chip is now visible; re-clamp its restored position against its real (non-zero) height.
-  reclampChipPosition();
+  // The chip is now visible — (re)anchor it clear of the composer's own text (or re-clamp a
+  // user-dragged position against the real, non-zero height it only has once visible).
+  repositionChip();
 }
 
 function writeWithInstruction(composer: Composer, redacted: string, addInstruction: boolean) {
@@ -832,7 +924,7 @@ function refreshPopover() {
       const { text } = session.redactManualValue(src, value);
       if (text !== src) {
         writeWithInstruction(composer, text, true);
-        showToast(t(uiLang, "hiddenValue", { v: value }));
+        showToast(t(uiLang, "hiddenValue", { v: placeholderFor(value) ?? value }));
       } else {
         showToast(t(uiLang, "notFoundInBox", { v: value }), "error");
       }

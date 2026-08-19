@@ -73,13 +73,13 @@ function CopyableText({
         readOnly
         dir="auto"
         value={value}
-        className={`h-40 w-full resize-none rounded-3xl border ${border} p-4 pt-10 text-[13px] leading-relaxed`}
+        className={`h-40 w-full resize-none rounded-3xl border ${border} p-4 pt-14 text-[13px] leading-relaxed`}
       />
       <button
         type="button"
         onClick={copy}
         aria-label={t(lang, "copy")}
-        className="absolute left-2.5 top-2.5 flex h-9 w-9 items-center justify-center rounded-full border border-zinc-200 bg-white/90 text-zinc-600 shadow-sm transition hover:text-ink"
+        className="absolute left-2 top-2 flex h-11 w-11 items-center justify-center rounded-full border border-zinc-200 bg-white/90 text-zinc-600 shadow-sm transition hover:text-ink"
       >
         {copied ? (
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4">

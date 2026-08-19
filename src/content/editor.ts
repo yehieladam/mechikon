@@ -233,6 +233,48 @@ function wrapTokens(textNode: Text): void {
   textNode.parentNode?.replaceChild(fragment, textNode);
 }
 
+/**
+ * The exact placeholder token (e.g. "[NAME_1]") under a screen point, or null when the point isn't
+ * inside one. Used by click-to-unmask (pick mode): clicking an already-masked value should reveal it
+ * again instead of being silently ignored by wordAround's "never nest tokens" guard below.
+ */
+export function tokenAtPoint(x: number, y: number): string | null {
+  let node: Node | null = null;
+  let offset = 0;
+  const doc = document as Document & {
+    caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+  };
+  if (typeof document.caretRangeFromPoint === "function") {
+    const range = document.caretRangeFromPoint(x, y);
+    node = range?.startContainer ?? null;
+    offset = range?.startOffset ?? 0;
+  } else if (doc.caretPositionFromPoint) {
+    const pos = doc.caretPositionFromPoint(x, y);
+    node = pos?.offsetNode ?? null;
+    offset = pos?.offset ?? 0;
+  }
+  if (!node || node.nodeType !== Node.TEXT_NODE) {
+    return null;
+  }
+  return tokenAround((node as Text).nodeValue ?? "", offset);
+}
+
+/** The full `[LABEL_n]` token containing `offset` in `text`, or null. Extracted from tokenAtPoint so
+ *  the boundary logic is unit-testable without a live caret (mirrors wordAround/wordAtPoint below). */
+export function tokenAround(text: string, offset: number): string | null {
+  TOKEN.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = TOKEN.exec(text)) !== null) {
+    const start = match.index;
+    const end = start + match[0].length;
+    // Inclusive on both edges so a click right on the brackets still counts.
+    if (offset >= start && offset <= end) {
+      return match[0];
+    }
+  }
+  return null;
+}
+
 /** The whole word/number under a screen point (letters+digits run), or null. Used by click-to-hide:
  *  the user clicks a value in the composer and we mask exactly that token. */
 export function wordAtPoint(x: number, y: number): string | null {
