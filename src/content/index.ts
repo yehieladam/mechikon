@@ -513,32 +513,37 @@ function placeholderFor(value: string): string | null {
 document.addEventListener(
   "mousedown",
   (event) => {
-    if (!pickMode) {
-      return;
-    }
     const editable = closestEditable(event.target as Node | null);
     if (!editable) {
       return; // click outside a composer (e.g. our own UI) — ignore
     }
     // A click landing on an EXISTING token un-masks just that value (every repeat of it) back to the
-    // original — the inverse of the mask click below. Checked FIRST so a click inside "[NAME_1]" never
+    // original — the inverse of the mask click below. Works ALWAYS, not only in pick mode: a green chip
+    // is a removable control, so the user should be able to click it to undo without arming pick mode
+    // first (this is exactly what a first user tries). Checked FIRST so a click inside "[NAME_1]" never
     // falls through to wordAtPoint's "never nest tokens" rejection; it now does something useful.
-    const token = tokenAtPoint(event.clientX, event.clientY);
-    if (token) {
-      event.preventDefault();
-      event.stopPropagation();
-      const src = getText(editable);
-      const { text: original, unmatched } = session.restore(token);
-      if (unmatched.length > 0 || original === token) {
-        showToast(t(uiLang, "notFoundInBox", { v: token }), "info");
+    if (session.hasKey) {
+      const token = tokenAtPoint(event.clientX, event.clientY);
+      if (token) {
+        event.preventDefault();
+        event.stopPropagation();
+        const src = getText(editable);
+        const { text: original, unmatched } = session.restore(token);
+        if (unmatched.length > 0 || original === token) {
+          showToast(t(uiLang, "notFoundInBox", { v: token }), "info");
+          return;
+        }
+        // Un-mask every repeat of this exact token in the composer — mirrors how masking a value catches
+        // every repeat of it (see the module note above).
+        const next = src.split(token).join(original);
+        writeWithInstruction(editable, next, false); // restoring — no new AI instruction needed
+        showToast(t(uiLang, "restored"));
+        updateChip();
         return;
       }
-      // Un-mask every repeat of this exact token in the composer — mirrors how masking a value catches
-      // every repeat of it (see the module note above).
-      const next = src.split(token).join(original);
-      writeWithInstruction(editable, next, false); // restoring — no new AI instruction needed
-      showToast(t(uiLang, "restored"));
-      updateChip();
+    }
+    // Masking a fresh value is the deliberate pick-mode action.
+    if (!pickMode) {
       return;
     }
     const word = wordAtPoint(event.clientX, event.clientY);

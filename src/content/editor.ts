@@ -222,8 +222,9 @@ function wrapTokens(textNode: Text): void {
     const chip = document.createElement("span");
     chip.textContent = match[0];
     chip.dataset.mechikonTok = "1";
+    // cursor:pointer signals the chip is clickable — click-to-unmask (see index.ts mousedown handler).
     chip.style.cssText =
-      "background:rgba(52,199,89,.20);color:#0a7d38;border-radius:4px;padding:0 3px;font-weight:600;";
+      "background:rgba(52,199,89,.20);color:#0a7d38;border-radius:4px;padding:0 3px;font-weight:600;cursor:pointer;";
     fragment.appendChild(chip);
     last = match.index + match[0].length;
   }
