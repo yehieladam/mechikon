@@ -186,6 +186,16 @@ interface NerModelConfig {
   readonly modelId: string;
   /** ONNX weight precision. q8 (int8) parity is proven for both models. */
   readonly dtype: "q8";
+  /**
+   * MODEL INTEGRITY (B6): pin the exact model snapshot instead of the mutable `main` ref. Each SHA is
+   * the model repo's current commit as of 2026-08-19 (resolved via the HF API). With a commit SHA
+   * every fetch resolves `/resolve/<sha>/...` — an immutable, commit-addressed snapshot — so a later
+   * (possibly malicious) push to the model repo can never change what this app downloads and runs.
+   * No post-download digest check: transformers.js 4.2.0 exposes no integrity hook on the fetch path,
+   * so pinning the revision + TLS is the accepted integrity measure. If a model is re-exported, update
+   * its SHA deliberately and re-run the recall harness.
+   */
+  readonly revision: string;
   readonly continuation: RegExp;
 }
 
@@ -193,6 +203,7 @@ interface NerModelConfig {
 const HEBREW_CONFIG: NerModelConfig = {
   modelId: "onnx-community/dictabert-ner-ONNX",
   dtype: "q8",
+  revision: "4f0aabf58566526df6f3fb548e0fd2619fbf2b1d",
   continuation: HEBREW_LETTER,
 };
 
@@ -201,6 +212,7 @@ const HEBREW_CONFIG: NerModelConfig = {
 const ENGLISH_CONFIG: NerModelConfig = {
   modelId: "Xenova/bert-base-NER",
   dtype: "q8",
+  revision: "24c7e5aba9ae350923357a6f0b92571be34037ec",
   continuation: LATIN_LETTER,
 };
 
@@ -258,6 +270,7 @@ async function createNer(config: NerModelConfig, options: NerLoadOptions): Promi
   const classifier = await pipeline("token-classification", config.modelId, {
     device: options.device ?? "wasm",
     dtype: config.dtype,
+    revision: config.revision,
     progress_callback: options.progressCallback,
   });
 
