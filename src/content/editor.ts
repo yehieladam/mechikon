@@ -69,7 +69,19 @@ export function setWholeText(el: Composer, text: string): boolean {
   range.selectNodeContents(el);
   sel?.removeAllRanges();
   sel?.addRange(range);
-  return document.execCommand("insertText", false, text);
+  const ok = document.execCommand("insertText", false, text);
+  // Some editors (Gemini's Quill) DELETE the selected content on insertText but then reject the
+  // insert, wiping the whole composer (confirmed: the user's draft vanished and Ctrl+Z brought it
+  // back — the delete is on the undo stack). Detect the empty-out wipe and repopulate directly so a
+  // manual mask can never clear the user's text. The direct DOM insert may bypass the editor's model,
+  // but preserving the draft beats losing it — the tokens still read back via textContent.
+  if (text.length > 0 && getText(el).length === 0) {
+    range.selectNodeContents(el);
+    range.deleteContents();
+    range.insertNode(document.createTextNode(text));
+    return true;
+  }
+  return ok;
 }
 
 /** Set a React-controlled input's value via the native setter so React's onChange still fires. */
