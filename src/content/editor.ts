@@ -32,10 +32,28 @@ export function getText(el: Composer): string {
   if (isInput(el)) {
     return el.value;
   }
-  // innerText (not textContent) so line breaks between the editor's inner blocks/<br> are preserved —
-  // textContent glues every paragraph into one line, which then gets written back as a single flat line
-  // and mangles multi-line drafts. Fall back to textContent if innerText is unavailable.
+  // Rich editors (ProseMirror/Lexical/Quill) build one block element per line. `innerText` inserts
+  // TWO "\n" at each block boundary (a <p>'s required-line-break-count is 2), but setWholeText writes
+  // back through insertText, which turns every "\n" into a NEW paragraph. So an innerText round-trip
+  // inflates one paragraph break into an empty paragraph, and repeated masking stacks blank lines
+  // (BUG 2). Read one "\n" per top-level block instead, so getText and setWholeText are symmetric.
+  const blocks = Array.from(el.children).filter(
+    (c): c is HTMLElement => c instanceof HTMLElement,
+  );
+  if (blocks.length > 0) {
+    return blocksToText(blocks);
+  }
+  // Fall back to innerText (line breaks preserved) / textContent for editors without block children.
   return el.innerText ?? el.textContent ?? "";
+}
+
+/**
+ * Join top-level editor blocks into text with ONE "\n" per block (extracted from getText so the
+ * join is unit-testable without a DOM). A trailing block break inside a block's own innerText is
+ * dropped so an empty paragraph becomes exactly one blank line — see the BUG 2 note in getText.
+ */
+export function blocksToText(blocks: readonly { readonly innerText: string }[]): string {
+  return blocks.map((b) => b.innerText.replace(/\n+$/, "")).join("\n");
 }
 
 /** Replace the entire composer content with `text`, as one native edit. */
@@ -223,22 +241,45 @@ export function wordAtPoint(x: number, y: number): string | null {
   if (!node || node.nodeType !== Node.TEXT_NODE) {
     return null;
   }
-  const text = (node as Text).nodeValue ?? "";
+  return wordAround((node as Text).nodeValue ?? "", offset);
+}
+
+/**
+ * The whole non-whitespace unit around `offset` in `text`, with edge punctuation trimmed — or null.
+ * Extracted from wordAtPoint so the boundary logic is unit-testable without a live caret.
+ *
+ * A unit is a run of non-whitespace (mirrors the popup's `text.split(/\s+/)`), so INTERNAL punctuation
+ * stays part of the value: "בן-גוריון", "ג'ון", "050-1234567", "dan@gmail.com" come back whole
+ * (BUG 1 — the old letters+digits-only run cut them at the first inner '-'/'\''/'@'/'.'). Only leading
+ * and trailing non-alphanumerics are trimmed, exactly like the popup's `splitToken`.
+ */
+export function wordAround(text: string, offset: number): string | null {
+  const isSpace = (ch: string) => /\s/.test(ch);
   const isWord = (ch: string) => /[\p{L}\p{N}]/u.test(ch);
   let i = offset;
-  if (i >= text.length || !isWord(text[i])) {
-    i -= 1; // a click on the right edge lands one past the last char
+  if (i >= text.length || isSpace(text[i])) {
+    i -= 1; // a click on the right edge (or a space) lands one past the intended char
   }
-  if (i < 0 || !isWord(text[i])) {
+  if (i < 0 || isSpace(text[i])) {
     return null;
   }
   let start = i;
   let end = i + 1;
-  while (start > 0 && isWord(text[start - 1])) {
+  while (start > 0 && !isSpace(text[start - 1])) {
     start -= 1;
   }
-  while (end < text.length && isWord(text[end])) {
+  while (end < text.length && !isSpace(text[end])) {
     end += 1;
+  }
+  // Trim edge punctuation (parentheses, trailing period, quotes) but keep the run's inner characters.
+  while (start < end && !isWord(text[start])) {
+    start += 1;
+  }
+  while (end > start && !isWord(text[end - 1])) {
+    end -= 1;
+  }
+  if (start >= end) {
+    return null;
   }
   // Reject a click INSIDE an existing placeholder token, e.g. the "NUM"/"1" of "[NUM_1]" — masking
   // those would nest tokens and orphan the original mapping (breaking restore).
