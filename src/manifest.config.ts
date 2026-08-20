@@ -13,7 +13,7 @@ export default defineManifest({
   name: "מחיקון · Mechikon — PII Anonymizer for AI Chats",
   version: "0.1.0",
   description:
-    "Mask Hebrew & English personal details before sending them to ChatGPT, Claude or Gemini — 100% in your browser. Nothing leaves your device.",
+    "Mask Hebrew & English personal details before sending them to ChatGPT, Claude or Gemini — 100% in your browser.",
   icons: {
     16: "icons/icon-16.png",
     32: "icons/icon-32.png",
