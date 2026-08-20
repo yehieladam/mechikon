@@ -11,7 +11,11 @@ import { defineManifest } from "@crxjs/vite-plugin";
 export default defineManifest({
   manifest_version: 3,
   name: "מחיקון · Mechikon — PII Anonymizer for AI Chats",
-  version: "0.1.0",
+  version: "0.1.1",
+  // The NER path relies on chrome.offscreen with Reason.WORKERS. On older Chrome the enum is undefined
+  // and createDocument throws, silently breaking name detection forever. Gate install to a version
+  // where the offscreen API and its reasons are stable.
+  minimum_chrome_version: "116",
   description:
     "Mask Hebrew & English personal details before sending them to ChatGPT, Claude or Gemini — 100% in your browser.",
   icons: {

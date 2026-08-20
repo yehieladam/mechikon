@@ -5,15 +5,50 @@ import { restore } from "@engine/restore";
 import { extractText, ACCEPTED } from "./extract";
 import { requestNer } from "../shared/ner";
 import { RedactSession } from "../shared/session";
+import { loadLiveRestore, saveLiveRestore } from "../shared/settings";
 import { detectTextLang, withInstruction } from "../shared/instruction";
 import { defaultLang, t, type Lang } from "../shared/i18n";
 
 type Status = "idle" | "working" | "picking" | "done" | "error";
 
+// The NER model may still be downloading on first use; wait generously before giving up (and then
+// warn rather than silently ship unmasked names). A hard load failure still returns quickly (ok:false).
+const POPUP_NER_TIMEOUT_MS = 45000;
+
+// The popup is destroyed on close, so its React state is gone on reopen. We persist only the current
+// TAB to chrome.storage.session (cleared when the browser closes) so the user lands where they left
+// off — specifically on "Restore answer" after a mask. We deliberately do NOT persist the mask result
+// or the raw extracted text: clicking "Mask a file" should always start a fresh upload, and the raw
+// text holds real PII. The restore key itself lives in storage, so restore works regardless.
+const POPUP_STATE_KEY = "popupState.v1";
+
+function writePopupTab(mode: "redact" | "restore"): void {
+  try {
+    // Catch BOTH a synchronous throw (no session storage) and an async rejection (quota/serialization)
+    // — continuity is best-effort, never surface it as an unhandled rejection.
+    void chrome.storage.session?.set({ [POPUP_STATE_KEY]: { mode } }).catch(() => undefined);
+  } catch {
+    /* session storage unavailable — continuity is best-effort */
+  }
+}
+
+async function readPopupTab(): Promise<"redact" | "restore" | null> {
+  try {
+    const bag = await chrome.storage.session?.get(POPUP_STATE_KEY);
+    const saved = bag?.[POPUP_STATE_KEY] as { mode?: "redact" | "restore" } | undefined;
+    return saved?.mode ?? null;
+  } catch {
+    return null;
+  }
+}
+
 interface Result {
   readonly redacted: string;
   readonly baseName: string;
   readonly count: number;
+  /** True when the NER model did not answer in time, so names/orgs may NOT be masked — the UI must
+   *  warn instead of claiming full protection, and offer a retry once the model has loaded. */
+  readonly namesUncertain: boolean;
 }
 
 function download(name: string, text: string, type: string): void {
@@ -171,6 +206,11 @@ export function App() {
   const [termInput, setTermInput] = useState("");
   const [session] = useState(() => new RedactSession());
   const [sessionReady, setSessionReady] = useState(false);
+  const [liveRestore, setLiveRestore] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+  // Set once the user interacts with the tabs, so a slow storage.session read on mount can't yank the
+  // tab back to the persisted value after the user already chose one.
+  const interactedRef = useRef(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const keyInputRef = useRef<HTMLInputElement>(null);
 
@@ -187,24 +227,65 @@ export function App() {
   const langRef = useRef(lang);
   langRef.current = lang;
 
+  // Switch tabs AND remember the choice, so reopening the popup lands where the user left off.
+  // Clicking "Mask a file" always starts a fresh upload — clear any prior result/extracted text.
+  const selectMode = useCallback((next: "redact" | "restore") => {
+    interactedRef.current = true;
+    setMode(next);
+    writePopupTab(next);
+    if (next === "redact") {
+      setStatus("idle");
+      setResult(null);
+      setExtracted("");
+      setTerms([]);
+      setKeySaved(false);
+    }
+  }, []);
+
   // The popup shares the ONE session key with the chat overlay (same chrome.storage). Hydrate it so
   // restore is ready automatically and file tokens stay consistent with chat tokens.
   useEffect(() => {
     void session.hydrate().then(() => setSessionReady(session.hasKey));
   }, [session]);
 
+  // The live-restore opt-in is shared with the chat overlay (chrome.storage.local). Read it once so
+  // the toggle reflects the real state; writing it flips the content script live (it listens for the
+  // storage change), no page reload.
+  useEffect(() => {
+    void loadLiveRestore().then(setLiveRestore);
+    // Warm the model the moment the popup opens (fire-and-forget) so it's downloading while the user
+    // picks a file, not only after they drop one. timeout 1 => don't wait; the offscreen load persists.
+    void requestNer("א", 1);
+    // Continue on the tab the last popup session left off on. After a successful mask this is the
+    // "Restore answer" tab (see finishRedact) — the natural next step is pasting the AI's answer.
+    void readPopupTab().then((savedMode) => {
+      // Don't override a tab the user already picked while this async read was in flight.
+      if (savedMode && !interactedRef.current) {
+        setMode(savedMode);
+      }
+    });
+  }, []);
+
+  const toggleLiveRestore = useCallback((enabled: boolean) => {
+    setLiveRestore(enabled);
+    void saveLiveRestore(enabled);
+  }, []);
+
   const finishRedact = useCallback(
     // `lang` is the language of the SOURCE document (computed by the caller from the file/preview text),
     // NOT the current UI language — so a Hebrew file always gets the Hebrew AI note even on an
     // English-locale browser, and vice versa.
-    (redacted: string, base: string, lang: Lang) => {
+    (redacted: string, base: string, lang: Lang, namesUncertain = false) => {
       // Count DISTINCT masks actually in the output (not only newly minted rows) — a value already in
       // the shared key still appears as a token, so newRows can be 0 while the text is masked.
       const count = new Set(redacted.match(/\[[^[\]]+_\d+\]/g) ?? []).size;
-      setResult({ redacted: withInstruction(redacted, lang), baseName: base, count });
+      setResult({ redacted: withInstruction(redacted, lang), baseName: base, count, namesUncertain });
       setSessionReady(session.hasKey);
       setKeySaved(false);
       setStatus("done");
+      // Next time the popup opens, land on the Restore tab — the natural next step is pasting the AI's
+      // answer back. (The mask result is NOT persisted; clicking "Mask a file" starts fresh.)
+      writePopupTab("restore");
     },
     [session],
   );
@@ -220,6 +301,25 @@ export function App() {
   const toggleTerm = useCallback((word: string) => {
     setTerms((prev) => (prev.includes(word) ? prev.filter((w) => w !== word) : [...prev, word]));
   }, []);
+
+  // Re-run the name pass after a timed-out first attempt (model was still loading). Reuses the already
+  // extracted text and the stable session key, so deterministic tokens keep their numbers and names are
+  // added on top. Only enabled while a result is showing (extracted text is present).
+  const retryNames = useCallback(async () => {
+    if (!extracted) {
+      return;
+    }
+    // Keep the result card mounted (status stays "done") and just disable the button — using
+    // setStatus("working") would swap the whole view back to the upload dropzone for the full timeout.
+    setRetrying(true);
+    try {
+      const ner = await requestNer(extracted, POPUP_NER_TIMEOUT_MS);
+      const { text: redacted } = session.redact(extracted, ner.spans);
+      finishRedact(redacted, baseName, detectTextLang(extracted, defaultLang()), !ner.ok);
+    } finally {
+      setRetrying(false);
+    }
+  }, [extracted, baseName, session, finishRedact]);
 
   const doManualRedact = useCallback(() => {
     const { text } = session.redactManualTerms(extracted, terms);
@@ -290,12 +390,14 @@ export function App() {
           setStatus("picking");
           return;
         }
-        const ner = await requestNer(text);
+        // A generous timeout: the model can be mid-download on first use. If it still times out we do
+        // NOT claim full protection — namesUncertain=!ner.ok surfaces a warning + retry below.
+        const ner = await requestNer(text, POPUP_NER_TIMEOUT_MS);
         const { text: redacted } = session.redact(text, ner.spans);
         // Language of the FILE (before masking) — so the instruction matches the document, not the
         // browser locale. Also lets the results view render in the document's language.
         setExtracted(text);
-        finishRedact(redacted, base, detectTextLang(text, defaultLang()));
+        finishRedact(redacted, base, detectTextLang(text, defaultLang()), !ner.ok);
       } catch (err) {
         setError(
           friendlyError(err instanceof Error ? err.message : String(err), file.name, langRef.current),
@@ -333,7 +435,7 @@ export function App() {
       <div className="mb-4 inline-flex w-full rounded-2xl bg-zinc-100 p-1" role="group">
         <button
           type="button"
-          onClick={() => setMode("redact")}
+          onClick={() => selectMode("redact")}
           className={`h-10 flex-1 rounded-xl text-[13px] font-semibold transition ${
             mode === "redact" ? "bg-white text-ink shadow-sm" : "text-zinc-500"
           }`}
@@ -342,7 +444,7 @@ export function App() {
         </button>
         <button
           type="button"
-          onClick={() => setMode("restore")}
+          onClick={() => selectMode("restore")}
           className={`h-10 flex-1 rounded-xl text-[13px] font-semibold transition ${
             mode === "restore" ? "bg-white text-ink shadow-sm" : "text-zinc-500"
           }`}
@@ -432,6 +534,27 @@ export function App() {
             {t(lang, "redactedReady", { n: result.count })}
           </div>
 
+          {result.namesUncertain && (
+            <div
+              role="alert"
+              className="flex flex-col gap-2 rounded-xl bg-amber-50 px-3 py-2 text-[13px] font-medium text-amber-800"
+            >
+              <span>{t(lang, "namesUncertain")}</span>
+              {/* Retry needs the raw extracted text, which isn't persisted across a popup reopen — hide
+                  it then; re-uploading the file is the path in that case. */}
+              {extracted && (
+                <button
+                  type="button"
+                  disabled={retrying}
+                  onClick={() => void retryNames()}
+                  className="h-9 self-start rounded-full bg-amber-500 px-4 text-[13px] font-semibold text-white transition hover:brightness-105 disabled:opacity-50"
+                >
+                  {retrying ? t(lang, "processing") : t(lang, "retryNames")}
+                </button>
+              )}
+            </div>
+          )}
+
           <CopyableText value={result.redacted} lang={lang} />
 
           <div className="flex flex-wrap gap-2">
@@ -469,6 +592,7 @@ export function App() {
                 setResult(null);
                 setKeySaved(false);
                 setExtracted("");
+                writePopupTab("redact");
               }}
               className="text-[13px] font-medium text-zinc-400 hover:text-ink"
             >
@@ -608,6 +732,19 @@ export function App() {
           {restored !== null && <CopyableText value={restored} lang={lang} tone="ok" />}
         </div>
       )}
+
+      <label className="mt-4 flex items-start gap-3 rounded-2xl border border-zinc-200 p-3">
+        <input
+          type="checkbox"
+          checked={liveRestore}
+          onChange={(e) => toggleLiveRestore(e.target.checked)}
+          className="mt-0.5 h-5 w-5 shrink-0 accent-black"
+        />
+        <span className="flex flex-col gap-0.5">
+          <span className="text-[13px] font-semibold text-ink">{t(lang, "liveRestoreLabel")}</span>
+          <span className="text-[11px] leading-relaxed text-zinc-400">{t(lang, "liveRestoreHint")}</span>
+        </span>
+      </label>
 
       <p className="mt-4 text-[11px] leading-relaxed text-zinc-400">{t(lang, "footerPrivacy")}</p>
     </main>

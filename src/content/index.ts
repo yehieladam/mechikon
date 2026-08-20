@@ -10,6 +10,7 @@
  */
 import { RedactSession } from "../shared/session";
 import { requestNer } from "../shared/ner";
+import { loadLiveRestore, LIVE_RESTORE_STORAGE_KEY } from "../shared/settings";
 import {
   detectTextLang,
   withInstruction as buildWithInstruction,
@@ -38,6 +39,11 @@ let uiLang: Lang = defaultLang();
 // before that call, or accessing them hits the `let`/`const` temporal dead zone and the whole content
 // script throws at load (a runtime error tsc/build do not catch).
 const CHIP_POS_KEY = "chipPos.v1";
+// The first name pass often waits on a multi-minute model download; a short timeout would strand the
+// chip on "masking names…". Wait generously, and the `ner:ready` broadcast reruns the pass if this
+// still times out. A hard load failure returns ok:false quickly (offscreen catches it), so this
+// ceiling only bites while the model is genuinely still downloading.
+const NER_TIMEOUT_MS = 30000;
 let repositionChip: () => void = () => {};
 // True once the user has dragged the chip (or a dragged position was restored from storage) — their
 // placement then overrides the auto-tracking in makeDraggable's autoTrack(), permanently.
@@ -612,6 +618,16 @@ function setChipProtected(count: number) {
   ui.chip.style.display = "flex";
 }
 
+/** The name model failed to load for a redact the user asked for: NOT green (names were never masked).
+ *  Amber dot + hide button visible so the user can retry (the model may recover on a later attempt). */
+function setChipNamesUnavailable() {
+  ui.dot.className = "dot detected";
+  ui.chipLabel.textContent = t(uiLang, "namesUnavailableShort");
+  ui.chipBtn.style.display = ""; // keep "hide" so a retry re-runs the whole pass
+  ui.restoreBtn.style.display = session.hasKey ? "" : "none";
+  ui.chip.style.display = "flex";
+}
+
 /** Composer has text but nothing auto-detected — neutral dot, manual "בחר ידנית" still available. */
 function setChipIdle() {
   ui.dot.className = "dot idle";
@@ -668,13 +684,28 @@ function restoreVisible() {
 }
 
 // ---- live restore: un-mask the AI's answer as it streams in --------------------------
-// When a key exists, restore [TOKEN]s to their real values live, as the answer renders — so the user
-// reads real values with no manual step. Read-only areas ONLY (never a composer). This is a local
-// display change; if the user copies a restored answer back into the composer, the send-guard catches
-// it — its key-value check re-flags any restored value (names/orgs included), so live restore can't
-// cause a silent re-leak.
+// OPT-IN, default OFF (see shared/settings.ts). When enabled AND a key exists, restore [TOKEN]s to
+// their real values live, as the answer renders — so the user reads real values with no manual step.
+// Read-only areas ONLY (never a composer). This is a local display change; if the user copies a
+// restored answer back into the composer, the send-guard catches it — its key-value check re-flags any
+// restored value (names/orgs included), so live restore can't cause a silent re-leak.
+//
+// Default OFF because auto-revealing paints real sensitive values back into a third-party page's DOM,
+// and — more visibly — it un-masks the user's OWN just-sent message bubble, which reads as a leak even
+// though the transmitted bytes stayed tokenized. The manual "restore" button covers reading answers.
 let liveTimer = 0;
 const livePending = new Set<Text>();
+
+/** True while the token sits inside the active/last composer (the user's own input). A second guard
+ *  beyond closestEditable: if a site ever reparents its composer so closestEditable misreads it, this
+ *  still stops flushLiveRestore from writing real values INTO the box (which would be a real leak). */
+function isInsideComposer(node: Node): boolean {
+  const active = focusedComposer();
+  if (active && active.contains(node)) {
+    return true;
+  }
+  return !!(lastComposer && lastComposer.isConnected && lastComposer.contains(node));
+}
 
 /** Queue any token-bearing text node under `node` (a changed text node or a freshly added subtree). */
 function queueLiveNode(node: Node): void {
@@ -716,7 +747,9 @@ function flushLiveRestore(): void {
     }
     const parent = tn.parentElement;
     // Never rewrite inside a composer (that is the user's own input, handled by the mask flow).
-    if (!parent || closestEditable(parent)) {
+    // Two independent guards: the generic contentEditable host check AND an explicit containment check
+    // against the tracked composer, so a misidentified editable can't leak real values into the box.
+    if (!parent || closestEditable(parent) || isInsideComposer(tn)) {
       continue;
     }
     const original = tn.nodeValue ?? "";
@@ -747,18 +780,51 @@ const liveObserver = new MutationObserver((records) => {
   }
 });
 
-function startLiveRestore(): void {
-  if (document.body) {
-    liveObserver.observe(document.body, { childList: true, characterData: true, subtree: true });
+// The observer is attached only while the opt-in is ON; toggling the setting in the popup flips it
+// live (no page reload), and turning it OFF disconnects and drops any queued nodes so nothing gets
+// revealed after the user opts back out.
+function applyLiveRestoreSetting(enabled: boolean): void {
+  if (!document.body) {
+    return;
   }
+  if (enabled) {
+    liveObserver.observe(document.body, { childList: true, characterData: true, subtree: true });
+  } else {
+    liveObserver.disconnect();
+    livePending.clear();
+    window.clearTimeout(liveTimer);
+    liveTimer = 0;
+  }
+}
+
+function startLiveRestore(): void {
+  void loadLiveRestore().then(applyLiveRestoreSetting);
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === "local" && changes[LIVE_RESTORE_STORAGE_KEY]) {
+      applyLiveRestoreSetting(changes[LIVE_RESTORE_STORAGE_KEY].newValue === true);
+    }
+  });
 }
 
 // ---- auto-detect: watch the composer -------------------------------------------------
 let detectTimer = 0;
+// Kick off the model download as soon as the user shows intent (focuses a chat composer), so it's
+// loading while they type instead of only starting on the first "hide" click (minutes of wait). Warm
+// with the composer's own text when present so the RIGHT language model preloads. Fire-and-forget.
+let warmed = false;
+function warmNer(composer: Composer): void {
+  if (warmed) {
+    return;
+  }
+  warmed = true;
+  const sample = getText(composer).trim();
+  void requestNer(sample.length > 0 ? sample : "א", 1);
+}
 function scheduleDetect() {
   const composer = focusedComposer();
   if (composer) {
     lastComposer = composer;
+    warmNer(composer);
   }
   window.clearTimeout(detectTimer);
   detectTimer = window.setTimeout(updateChip, 350);
@@ -815,6 +881,18 @@ function activeComposer(): Composer | null {
 /** True after a deterministic pass while NER names/orgs are still not applied (model loading, or the
  *  NER pass hasn't run yet). Drives the "partly protected" chip so we never falsely claim full safety. */
 let namesPending = false;
+/** True after the model FAILED to load for a redact the user asked for. Keeps the chip out of the
+ *  green "protected" state (names were never masked) while still offering a retry via the hide button.
+ *  Cleared on the next attempt and on a successful name pass. */
+let nerUnavailable = false;
+
+/** The language of the model the pending pass is waiting on (derived from its source text), or null
+ *  when nothing is pending. Lets the progress/error/ready handlers ignore lifecycle events for a
+ *  DIFFERENT language's model (e.g. a background Hebrew warm-load failing while an English redact is
+ *  in flight) instead of corrupting this pass's chip. */
+function pendingLang(): Lang | null {
+  return pendingNerSource !== null ? detectTextLang(pendingNerSource, defaultLang()) : null;
+}
 
 function updateChip() {
   const composer = activeComposer();
@@ -829,6 +907,8 @@ function updateChip() {
     setChipDetected(distinct.size);
   } else if (namesPending) {
     setChipPending();
+  } else if (nerUnavailable && session.hasKey) {
+    setChipNamesUnavailable(); // model failed: masked deterministically, but NEVER claim full green
   } else if (session.hasKey) {
     setChipProtected(0);
   } else if (text.trim().length > 0) {
@@ -856,6 +936,13 @@ function writeWithInstruction(composer: Composer, redacted: string, addInstructi
 // ---- redact-all (the chip) -----------------------------------------------------------
 // Two passes, so we never (a) block on the model, (b) overwrite text typed during the await, or
 // (c) claim full protection before names are actually masked.
+//
+// The pre-redaction source of the last redact is kept so that if the FIRST name pass timed out (model
+// still downloading), the `ner:ready` broadcast can re-run the name pass and finish the job — without
+// it the chip would spin on "masking names…" forever (the model loads minutes after an 8s timeout).
+let pendingNerSource: string | null = null;
+let nerPassRunning = false;
+
 async function redactAll() {
   const composer = activeComposer();
   if (!composer) {
@@ -866,6 +953,8 @@ async function redactAll() {
   const detPass = session.redact(original, []);
   writeWithInstruction(composer, detPass.text, detPass.newRows.length > 0);
   namesPending = true;
+  nerUnavailable = false; // fresh attempt — drop any prior load-failure state
+  pendingNerSource = original;
   setChipPending();
   showToast(
     detPass.newRows.length > 0
@@ -874,30 +963,46 @@ async function redactAll() {
     detPass.newRows.length > 0 ? "ok" : "info",
   );
 
-  // Pass 2 — NER names/orgs. Detect on the pre-redaction text, then re-read the CURRENT composer and
-  // mask the values still present there, so anything typed meanwhile is preserved (and also masked).
-  const ner = await requestNer(original);
-  if (ner.ok) {
-    nerReady = true; // a real response proves the model is up (covers the missed one-shot broadcast)
+  // Pass 2 — NER names/orgs, on this composer.
+  await applyNerPass(composer, original);
+}
+
+/** Detect names/orgs on `sourceText` (the pre-redaction text) and mask any that are still present in
+ *  the CURRENT composer, so anything typed during the await is preserved and also masked. Clears the
+ *  pending state only when the model actually answered (`ok`) — a timeout stays partly-protected so we
+ *  never show a false green while a name may be exposed. Re-entrancy-guarded so the initial await and a
+ *  later `ner:ready` rerun can't double-apply. */
+async function applyNerPass(composer: Composer, sourceText: string): Promise<void> {
+  if (nerPassRunning) {
+    return;
   }
-  if (!composer.isConnected) {
-    return; // composer was swapped out (message sent) — don't touch a detached node
-  }
-  const valued = ner.spans.map((span) => ({
-    value: original.slice(span.start, span.end),
-    type: span.type,
-  }));
-  const current = getText(composer);
-  const nerPass = session.redactNerValues(current, valued);
-  if (nerPass.newRows.length > 0) {
-    writeWithInstruction(composer, nerPass.text, true);
-    showToast(t(uiLang, "alsoHidNames", { n: nerPass.newRows.length }));
-  }
-  // Only claim full protection when the model ACTUALLY ran (ner.ok). A timeout (ok=false) is NOT the
-  // same as "no names" — stay partly-protected so we never show a false green while names may be exposed.
-  if (ner.ok) {
-    namesPending = false;
-    setChipProtected(detPass.newRows.length + nerPass.newRows.length);
+  nerPassRunning = true;
+  try {
+    const ner = await requestNer(sourceText, NER_TIMEOUT_MS);
+    if (ner.ok) {
+      nerReady = true; // a real response proves the model is up (covers the missed one-shot broadcast)
+    }
+    if (!composer.isConnected) {
+      return; // composer was swapped out (message sent) — don't touch a detached node
+    }
+    const valued = ner.spans.map((span) => ({
+      value: sourceText.slice(span.start, span.end),
+      type: span.type,
+    }));
+    const current = getText(composer);
+    const nerPass = session.redactNerValues(current, valued);
+    if (nerPass.newRows.length > 0) {
+      writeWithInstruction(composer, nerPass.text, true);
+      showToast(t(uiLang, "alsoHidNames", { n: nerPass.newRows.length }));
+    }
+    if (ner.ok) {
+      namesPending = false;
+      nerUnavailable = false;
+      pendingNerSource = null;
+      updateChip(); // recompute: nothing left detected + key present -> green "protected"
+    }
+  } finally {
+    nerPassRunning = false;
   }
 }
 
@@ -962,9 +1067,49 @@ function refreshPopover() {
 // caught automatically — let the user know so it's not mistaken for a miss.
 let nerReady = false;
 chrome.runtime.onMessage.addListener((msg) => {
-  if (msg?.type === "ner:ready" && !nerReady) {
+  // Download progress: while THIS pass's model is downloading, surface the % so the user sees progress
+  // instead of an indefinite spinner. Ignore progress for a different language's model (only update the
+  // chip label while the amber "detected" state isn't showing, so a freshly-typed value isn't hidden).
+  if (
+    msg?.type === "ner:progress" &&
+    namesPending &&
+    msg.lang === pendingLang() &&
+    typeof msg.pct === "number"
+  ) {
+    if (ui.dot.classList.contains("pending")) {
+      ui.chipLabel.textContent =
+        msg.pct >= 100 ? t(uiLang, "maskingNames") : t(uiLang, "downloadingModel", { p: msg.pct });
+    }
+    return;
+  }
+  // Load failure: only react when THIS pending pass needs the model that failed. A background warm-load
+  // failure (no pending redact) or a different language's model failing must NOT touch this chip or pop
+  // a toast — and we must never flip to green (names were never masked): setChipNamesUnavailable keeps
+  // it amber with the hide button so the user can retry.
+  if (msg?.type === "ner:error") {
+    if (namesPending && msg.lang === pendingLang()) {
+      namesPending = false;
+      nerUnavailable = true;
+      pendingNerSource = null;
+      updateChip();
+      showToast(t(uiLang, "modelLoadError"), "error");
+    }
+    return;
+  }
+  if (msg?.type !== "ner:ready") {
+    return;
+  }
+  if (!nerReady) {
     nerReady = true;
     showToast(t(uiLang, "nerReady"));
+  }
+  // If an earlier redact timed out waiting for THIS language's model, finish its name pass now that the
+  // model is up — otherwise the chip stays stuck on "masking names…" and names are never masked.
+  if (namesPending && pendingNerSource !== null && msg.lang === pendingLang()) {
+    const composer = activeComposer();
+    if (composer && composer.isConnected) {
+      void applyNerPass(composer, pendingNerSource);
+    }
   }
 });
 
