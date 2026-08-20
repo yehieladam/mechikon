@@ -29,13 +29,14 @@ async function ensureOffscreen(): Promise<void> {
 }
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  // The offscreen doc announces model readiness; content scripts can't hear runtime broadcasts,
-  // so relay it to every tab (failures on non-extension tabs are ignored).
-  if (msg && msg.type === "ner:ready") {
+  // The offscreen doc broadcasts model lifecycle events (readiness, download progress, load errors);
+  // content scripts can't hear runtime broadcasts, so relay them to every tab (failures on
+  // non-extension tabs are ignored). The full message is forwarded so progress %/error text survive.
+  if (msg && (msg.type === "ner:ready" || msg.type === "ner:progress" || msg.type === "ner:error")) {
     chrome.tabs.query({}, (tabs) => {
       for (const tab of tabs) {
         if (tab.id != null) {
-          void chrome.tabs.sendMessage(tab.id, { type: "ner:ready" }).catch(() => undefined);
+          void chrome.tabs.sendMessage(tab.id, msg).catch(() => undefined);
         }
       }
     });

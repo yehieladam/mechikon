@@ -47,6 +47,9 @@ const he = {
   // --- content: chip states ---
   detectedCount: (p: Params) => (Number(p.n) === 1 ? "פרט רגיש אחד" : `${p.n} פרטים רגישים`),
   maskingNames: "מסתיר שמות…",
+  downloadingModel: (p: Params) => `מוריד מנוע זיהוי שמות… ${p.p}%`,
+  modelLoadError: "טעינת מנוע זיהוי השמות נכשלה. פרטים דטרמיניסטיים (ת״ז, טלפון) כן הוסתרו.",
+  namesUnavailableShort: "מנוע השמות לא זמין — הסתר שוב לניסיון",
   protectedCount: (p: Params) =>
     Number(p.n) === 1 ? "מוגן · הוסתר פרט אחד" : `מוגן · ${p.n} הוסתרו`,
   protectedLabel: "מוגן",
@@ -112,6 +115,10 @@ const he = {
   keyLoadedCount: (p: Params) => `מפתח טעון · ${p.n}`,
   restoreOriginals: "שחזר את הערכים המקוריים",
   footerPrivacy: 'המידע הרגיש לא עוזב את הדפדפן. השחזור זמין אוטומטית בלשונית "שחזור תשובה".',
+  liveRestoreLabel: "שחזור אוטומטי של תשובות בצ'אט",
+  liveRestoreHint: "חושף ערכים אמיתיים בתשובת ה-AI על העמוד. כבוי כברירת מחדל לפרטיות.",
+  namesUncertain: "המנוע לזיהוי שמות עדיין נטען — שמות וארגונים אולי לא הוסתרו. נסו שוב עוד רגע.",
+  retryNames: "נסה שוב לזהות שמות",
 } satisfies Record<string, Entry>;
 
 const en: Record<keyof typeof he, Entry> = {
@@ -124,6 +131,9 @@ const en: Record<keyof typeof he, Entry> = {
   pickModeToast: "Pick mode: click words to hide (Esc to exit)",
   detectedCount: (p) => `${p.n} sensitive ${Number(p.n) === 1 ? "item" : "items"}`,
   maskingNames: "Masking names…",
+  downloadingModel: (p) => `Downloading name detector… ${p.p}%`,
+  modelLoadError: "Name detector failed to load. Deterministic details (ID, phone) were still masked.",
+  namesUnavailableShort: "Name detector unavailable — Hide to retry",
   protectedCount: (p) => `Protected · ${p.n} hidden`,
   protectedLabel: "Protected",
   pickWhat: "Select what to hide",
@@ -184,6 +194,11 @@ const en: Record<keyof typeof he, Entry> = {
   restoreOriginals: "Restore the original values",
   footerPrivacy:
     'Sensitive data never leaves your browser. Restore is available automatically in the "Restore answer" tab.',
+  liveRestoreLabel: "Auto-restore answers in chat",
+  liveRestoreHint: "Reveals real values in the AI's reply on the page. Off by default for privacy.",
+  namesUncertain:
+    "The name detector is still loading — names and orgs may not be masked. Try again in a moment.",
+  retryNames: "Retry name detection",
 };
 
 export type MsgKey = keyof typeof he;
